@@ -236,16 +236,23 @@ def build_html(geojson):
         for ds in DATASET_LABELS if ds in counts
     )
 
-    # Dataset buttons — start OFF (same as sat buttons)
-    dataset_buttons = "\n      ".join(
-        f'<button class="ds-btn" data-ds="{ds}" style="--c:{DATASET_COLORS[ds]}">'
-        f'{DATASET_LABELS[ds].split("—")[0].strip()}</button>'
-        for ds in DATASET_LABELS if ds in counts
-    )
-
-    # Satellite buttons — start OFF (additive model)
+    # Colour-code sat buttons by family
+    SAT_COLORS = {
+        "KH-1":               "#4dff8a",
+        "KH-2":               "#4dff8a",
+        "KH-3":               "#4dff8a",
+        "KH-4":               "#4dff8a",
+        "KH-4A":              "#4dff8a",
+        "KH-4B":              "#4dff8a",
+        "KH-5 (ARGON)":       "#a3ffcc",
+        "KH-6 (LANYARD)":     "#a3ffcc",
+        "KH-7 (GAMBIT)":      "#4db8ff",
+        "KH-9 Mapping Camera": "#ffa64d",
+        "KH-9 (HEXAGON)":     "#ffa64d",
+        "Unknown":            "#777777",
+    }
     sat_buttons = "\n      ".join(
-        f'<button class="sat-btn" data-sat="{s}">{s}</button>'
+        f'<button class="sat-btn" data-sat="{s}" style="--sat-c:{SAT_COLORS.get(s, "#888")}">{s}</button>'
         for s in sat_types
     )
 
@@ -259,111 +266,153 @@ def build_html(geojson):
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
 *{{margin:0;padding:0;box-sizing:border-box}}
-body{{background:#0d0d0d;color:#e0e0e0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;height:100vh;display:flex;flex-direction:column;overflow:hidden}}
+body{{background:#0a0a0a;color:#e0e0e0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;height:100vh;display:flex;flex-direction:column;overflow:hidden}}
 
-#header{{background:#111;border-bottom:1px solid #1e1e1e;padding:8px 14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;z-index:1000}}
-#header h1{{font-size:13px;font-weight:600;color:#fff;white-space:nowrap}}
-#header h1 span{{color:#444;font-weight:400;margin-left:5px;font-size:12px}}
-#stats{{font-size:11px;color:#555;display:flex;align-items:center;gap:4px;flex-wrap:wrap}}
-.dot{{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:3px}}
-#search{{background:#161616;border:1px solid #2a2a2a;color:#ccc;padding:4px 9px;border-radius:4px;font-size:11px;width:145px;outline:none;margin-left:auto}}
-#search:focus{{border-color:#555}}
-#search::placeholder{{color:#444}}
-
-#filters{{background:#0d0d0d;border-bottom:1px solid #191919;padding:7px 14px;display:flex;align-items:center;gap:20px;flex-wrap:wrap}}
-.filter-group{{display:flex;align-items:center;gap:6px;flex-wrap:wrap}}
-.filter-label{{font-size:10px;color:#444;text-transform:uppercase;letter-spacing:.06em;white-space:nowrap;min-width:50px}}
-
-/* Dataset toggles */
-.ds-btn{{
-  background:transparent;border:1px solid #2a2a2a;color:#444;
-  padding:3px 10px;border-radius:4px;cursor:pointer;font-size:11px;transition:all .15s;
+/* ── Header ── */
+#header{{
+  background:#0f0f0f;border-bottom:1px solid #1a1a1a;
+  padding:9px 16px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;z-index:1000;
 }}
-.ds-btn.on{{color:var(--c,#ccc);border-color:var(--c,#555);background:color-mix(in srgb,var(--c) 10%,transparent)}}
-.ds-btn:hover{{border-color:#555;color:#aaa}}
+#header h1{{font-size:13px;font-weight:600;color:#e8e8e8;white-space:nowrap;letter-spacing:.01em}}
+#header h1 span{{color:#3a3a3a;font-weight:400;margin-left:6px;font-size:11px}}
+#stats{{font-size:11px;color:#444;display:flex;align-items:center;gap:5px;flex-wrap:wrap}}
+.dot{{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:2px;opacity:.7}}
+#search-wrap{{margin-left:auto;position:relative;display:flex;align-items:center}}
+#search-wrap svg{{position:absolute;left:8px;opacity:.35;pointer-events:none}}
+#search{{background:#161616;border:1px solid #242424;color:#ccc;padding:5px 9px 5px 28px;
+  border-radius:6px;font-size:11px;width:160px;outline:none;transition:border-color .15s}}
+#search:focus{{border-color:#444;background:#1a1a1a}}
+#search::placeholder{{color:#383838}}
 
-/* Satellite toggles — additive (off by default, click to add to filter) */
+/* ── Filter bar ── */
+#filters{{
+  background:#0a0a0a;border-bottom:1px solid #161616;
+  padding:7px 16px;display:flex;align-items:center;gap:0;flex-wrap:nowrap;overflow-x:auto;
+}}
+#filters::-webkit-scrollbar{{height:0}}
+.filter-section{{display:flex;align-items:center;gap:7px;padding-right:18px;margin-right:18px;border-right:1px solid #1a1a1a;flex-shrink:0}}
+.filter-section:last-child{{border-right:none;padding-right:0;margin-right:0;margin-left:auto}}
+.filter-label{{font-size:9.5px;color:#383838;text-transform:uppercase;letter-spacing:.08em;white-space:nowrap}}
+
+/* Satellite buttons — colour-coded by family */
 .sat-btn{{
-  background:transparent;border:1px solid #222;color:#444;
-  padding:2px 8px;border-radius:3px;cursor:pointer;font-size:10px;transition:all .15s;
+  background:transparent;border:1px solid #1e1e1e;color:#3a3a3a;
+  padding:3px 9px;border-radius:4px;cursor:pointer;font-size:10.5px;
+  transition:all .12s;white-space:nowrap;flex-shrink:0;
+  --sat-c:#888;
 }}
-.sat-btn.on{{background:#222;border-color:#555;color:#ddd}}
-.sat-btn:hover{{border-color:#444;color:#999}}
+.sat-btn:hover{{border-color:#3a3a3a;color:#888}}
+.sat-btn.on{{
+  background:color-mix(in srgb,var(--sat-c) 12%,transparent);
+  border-color:color-mix(in srgb,var(--sat-c) 50%,transparent);
+  color:var(--sat-c);
+}}
+.sat-quick{{font-size:9.5px;color:#2e2e2e;cursor:pointer;padding:2px 5px;border-radius:3px;transition:color .12s;background:none;border:none;white-space:nowrap}}
+.sat-quick:hover{{color:#666}}
 
 /* Year slider */
-#date-group{{display:flex;align-items:center;gap:8px}}
-#date-group .filter-label{{min-width:unset}}
-.yr-val{{font-size:11px;color:#666;min-width:30px;text-align:center}}
-.slider-wrap{{position:relative;width:150px;height:20px}}
-#slider-track{{position:absolute;top:50%;left:0;right:0;height:2px;background:#222;transform:translateY(-50%);border-radius:2px}}
-#slider-fill{{position:absolute;top:50%;height:2px;background:#3a3a3a;transform:translateY(-50%);border-radius:2px;transition:background .2s}}
-#slider-fill.active{{background:#555}}
+.yr-val{{font-size:11px;color:#555;min-width:32px;text-align:center;font-variant-numeric:tabular-nums}}
+.slider-wrap{{position:relative;width:140px;height:20px;flex-shrink:0}}
+#slider-track{{position:absolute;top:50%;left:0;right:0;height:2px;background:#1e1e1e;transform:translateY(-50%);border-radius:2px}}
+#slider-fill{{position:absolute;top:50%;height:2px;background:#2e2e2e;transform:translateY(-50%);border-radius:2px;transition:background .2s}}
+#slider-fill.active{{background:#484848}}
 input[type=range]{{position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;cursor:pointer;pointer-events:auto;margin:0}}
-.thumb{{position:absolute;top:50%;width:11px;height:11px;background:#444;border-radius:50%;transform:translate(-50%,-50%);pointer-events:none;border:1px solid #666;transition:background .15s}}
-.thumb.active{{background:#888}}
+.thumb{{position:absolute;top:50%;width:10px;height:10px;background:#383838;border-radius:50%;transform:translate(-50%,-50%);pointer-events:none;border:1px solid #555;transition:background .15s}}
+.thumb.active{{background:#777}}
 
-.bm-btn{{background:transparent;border:1px solid #222;color:#444;padding:3px 9px;border-radius:4px;cursor:pointer;font-size:10px;transition:all .15s}}
-.bm-btn:hover{{border-color:#555;color:#888}}
-.bm-btn.on{{background:#1e1e1e;border-color:#555;color:#ccc}}
-#reset-filters{{background:transparent;border:1px solid #222;color:#444;padding:3px 9px;border-radius:4px;cursor:pointer;font-size:10px;transition:all .15s}}
-#reset-filters:hover{{border-color:#555;color:#888}}
-.leaflet-popup-tip-container,.leaflet-popup-tip{{display:none!important}}
+/* Basemap + reset */
+.bm-btn{{background:transparent;border:1px solid #1e1e1e;color:#383838;padding:3px 8px;border-radius:4px;cursor:pointer;font-size:10px;transition:all .12s;flex-shrink:0}}
+.bm-btn:hover{{border-color:#444;color:#888}}
+.bm-btn.on{{background:#1e1e1e;border-color:#484848;color:#bbb}}
+#reset-btn{{background:transparent;border:1px solid #1e1e1e;color:#2e2e2e;padding:3px 9px;border-radius:4px;cursor:pointer;font-size:10px;transition:all .12s;flex-shrink:0}}
+#reset-btn:hover{{border-color:#444;color:#777}}
 
-#map{{flex:1}}
+/* Map */
+#map{{flex:1;position:relative}}
 
-#counter{{
-  position:absolute;bottom:14px;left:50%;transform:translateX(-50%);
-  background:rgba(0,0,0,.8);backdrop-filter:blur(6px);
-  border:1px solid #222;color:#555;padding:5px 14px;
-  border-radius:20px;font-size:11px;z-index:1000;pointer-events:none;
-  transition:color .2s;
+/* Empty state */
+#empty-state{{
+  position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  text-align:center;pointer-events:none;z-index:500;
+  opacity:1;transition:opacity .3s;
 }}
-#counter.has-scenes{{color:#888}}
+#empty-state.hidden{{opacity:0}}
+#empty-state p{{font-size:13px;color:#2e2e2e;margin-bottom:6px}}
+#empty-state small{{font-size:11px;color:#252525}}
+
+/* Counter */
+#counter{{
+  position:absolute;bottom:16px;left:50%;transform:translateX(-50%);
+  background:rgba(10,10,10,.85);backdrop-filter:blur(8px);
+  border:1px solid #1e1e1e;color:#3a3a3a;padding:5px 14px;
+  border-radius:20px;font-size:11px;z-index:1000;pointer-events:none;
+  transition:all .2s;white-space:nowrap;
+}}
+#counter.has-scenes{{color:#666;border-color:#282828}}
 
 /* Popup */
-.leaflet-popup-content-wrapper{{background:#1a1a1a!important;border:1px solid #2e2e2e!important;border-radius:8px!important;box-shadow:0 12px 32px rgba(0,0,0,.9)!important;color:#e0e0e0!important}}
+.leaflet-popup-tip-container,.leaflet-popup-tip{{display:none!important}}
+.leaflet-popup-content-wrapper{{
+  background:#141414!important;border:1px solid #282828!important;
+  border-radius:10px!important;box-shadow:0 16px 40px rgba(0,0,0,.95)!important;
+  color:#e0e0e0!important;
+}}
 .leaflet-popup-content{{margin:0!important;padding:0!important}}
-.leaflet-popup-tip{{background:#1a1a1a!important}}
-.pu{{min-width:250px;max-width:270px;padding:12px}}
-.pu img{{width:100%;max-height:200px;object-fit:contain;object-position:center;border-radius:4px;margin-bottom:9px;display:block;cursor:pointer;background:#111}}
-.pu h3{{font-size:12px;font-weight:600;color:#fff;margin-bottom:5px;font-family:monospace;letter-spacing:.02em}}
-.pu-tags{{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:7px}}
-.pu-tag{{font-size:10px;padding:2px 7px;border-radius:3px;border:1px solid #333;color:#999;background:#1e1e1e}}
-.pu-tag.sat{{color:#bbb;border-color:#3a3a3a}}
-.pu .meta{{font-size:11px;color:#666;margin-bottom:9px;line-height:1.7}}
-.pu-footer{{display:flex;align-items:center;justify-content:space-between;gap:8px}}
-.pu-nav{{display:flex;align-items:center;gap:6px}}
-.pu-nav button{{background:#1e1e1e;border:1px solid #333;color:#888;padding:3px 9px;border-radius:4px;cursor:pointer;font-size:11px;transition:all .15s}}
-.pu-nav button:hover{{background:#2a2a2a;color:#bbb;border-color:#555}}
-.pu-nav button:disabled{{opacity:.25;cursor:default}}
-.pu-nav .pu-count{{font-size:10px;color:#555;white-space:nowrap}}
-.pu a{{font-size:11px;color:#00aaff;text-decoration:none;padding:3px 10px;border:1px solid #00aaff22;border-radius:4px;transition:all .15s;white-space:nowrap}}
-.pu a:hover{{background:#00aaff15;border-color:#00aaff55}}
-.leaflet-control-zoom a{{background:#161616!important;color:#666!important;border-color:#222!important}}
-.leaflet-control-attribution{{background:rgba(0,0,0,.4)!important;color:#333!important;font-size:9px!important}}
-.leaflet-control-attribution a{{color:#333!important}}
+.leaflet-popup-close-button{{color:#444!important;font-size:16px!important;padding:8px 10px!important;top:2px!important;right:2px!important}}
+.leaflet-popup-close-button:hover{{color:#aaa!important;background:none!important}}
+.pu{{width:260px;padding:13px}}
+.pu-img{{width:100%;max-height:190px;object-fit:contain;object-position:center;
+  border-radius:6px;margin-bottom:10px;display:block;cursor:pointer;background:#0d0d0d;
+  border:1px solid #1e1e1e}}
+.pu h3{{font-size:11.5px;font-weight:600;color:#e8e8e8;margin-bottom:6px;font-family:monospace;letter-spacing:.03em;line-height:1.4}}
+.pu-tags{{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:8px}}
+.pu-tag{{font-size:9.5px;padding:2px 7px;border-radius:3px;border:1px solid #222;color:#777;background:#111}}
+.pu-tag.sat{{color:#aaa;border-color:#2e2e2e}}
+.pu .meta{{font-size:11px;color:#555;margin-bottom:10px;line-height:1.8}}
+.pu-footer{{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}}
+.pu-nav{{display:flex;align-items:center;gap:5px}}
+.pu-nav button{{
+  background:#1a1a1a;border:1px solid #2a2a2a;color:#777;
+  padding:4px 10px;border-radius:5px;cursor:pointer;font-size:10.5px;transition:all .12s;
+}}
+.pu-nav button:hover{{background:#242424;color:#bbb;border-color:#444}}
+.pu-nav button:disabled{{opacity:.2;cursor:default}}
+.pu-nav .pu-count{{font-size:10px;color:#444;white-space:nowrap;min-width:40px;text-align:center}}
+.pu a{{
+  font-size:10.5px;color:#4d9fff;text-decoration:none;
+  padding:4px 10px;border:1px solid #4d9fff22;border-radius:5px;transition:all .12s;
+}}
+.pu a:hover{{background:#4d9fff12;border-color:#4d9fff44}}
+.leaflet-control-zoom{{border:1px solid #1e1e1e!important;border-radius:6px!important;overflow:hidden}}
+.leaflet-control-zoom a{{
+  background:#111!important;color:#555!important;border-color:#1e1e1e!important;
+  width:28px!important;height:28px!important;line-height:28px!important;font-size:15px!important;
+}}
+.leaflet-control-zoom a:hover{{background:#1e1e1e!important;color:#aaa!important}}
+.leaflet-control-attribution{{background:rgba(0,0,0,.35)!important;color:#2a2a2a!important;font-size:9px!important}}
+.leaflet-control-attribution a{{color:#2a2a2a!important}}
 </style>
 </head>
 <body>
 
 <div id="header">
   <h1>🛰 Declassified Satellite <span>Available Downloads</span></h1>
-  <div id="stats">{counts_html} &nbsp;|&nbsp; Updated <strong>{generated[:10]}</strong></div>
-  <input id="search" type="text" placeholder="Search entity ID…" />
+  <div id="stats">{counts_html} &nbsp;·&nbsp; Updated <strong>{generated[:10]}</strong></div>
+  <div id="search-wrap">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+    <input id="search" type="text" placeholder="Search entity ID…" autocomplete="off" />
+  </div>
 </div>
 
 <div id="filters">
-  <div class="filter-group">
-    <span class="filter-label">Dataset</span>
-    {dataset_buttons}
-  </div>
-
-  <div class="filter-group">
+  <div class="filter-section">
     <span class="filter-label">Satellite</span>
     {sat_buttons}
+    <button class="sat-quick" id="sat-all">All</button>
+    <button class="sat-quick" id="sat-none">None</button>
   </div>
 
-  <div class="filter-group" id="date-group">
+  <div class="filter-section">
     <span class="filter-label">Years</span>
     <span class="yr-val" id="yr-lo">{year_min}</span>
     <div class="slider-wrap">
@@ -377,18 +426,26 @@ input[type=range]{{position:absolute;top:0;left:0;width:100%;height:100%;opacity
     <span class="yr-val" id="yr-hi">{year_max}</span>
   </div>
 
-  <div class="filter-group" style="margin-left:auto">
+  <div class="filter-section">
     <span class="filter-label">Basemap</span>
     <button class="bm-btn on" data-bm="dark">Dark</button>
     <button class="bm-btn" data-bm="satellite">Satellite</button>
     <button class="bm-btn" data-bm="hybrid">Hybrid</button>
     <button class="bm-btn" data-bm="osm">OSM</button>
   </div>
-  <button id="reset-filters">Reset filters</button>
+
+  <div class="filter-section">
+    <button id="reset-btn">Reset</button>
+  </div>
 </div>
 
-<div id="map"></div>
-<div id="counter">{total:,} scenes</div>
+<div id="map">
+  <div id="empty-state">
+    <p>No scenes selected</p>
+    <small>Choose a satellite type above to show footprints</small>
+  </div>
+</div>
+<div id="counter">0 of {total:,} scenes</div>
 
 <script>
 const GEOJSON   = {geojson_str};
@@ -396,54 +453,45 @@ const DS_COLORS = {ds_colors_json};
 const YEAR_MIN  = {year_min};
 const YEAR_MAX  = {year_max};
 
-// ── Leaflet ──────────────────────────────────────────────────────────────────
-const map = L.map('map', {{center:[35,30], zoom:2, preferCanvas:true}});
+// ── Leaflet ───────────────────────────────────────────────────────────────────
+const map = L.map('map', {{center:[35,30], zoom:2, preferCanvas:true, zoomControl:true}});
 
 const BASEMAPS = {{
-  dark: L.tileLayer('https://{{s}}.basemaps.cartocdn.com/dark_all/{{z}}/{{x}}/{{y}}{{r}}.png',
-    {{attribution:'© CartoDB © OpenStreetMap', subdomains:'abcd', maxZoom:19}}),
+  dark:      L.tileLayer('https://{{s}}.basemaps.cartocdn.com/dark_all/{{z}}/{{x}}/{{y}}{{r}}.png',
+               {{attribution:'© CartoDB © OpenStreetMap', subdomains:'abcd', maxZoom:19}}),
   satellite: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}',
-    {{attribution:'© Esri © USGS', maxZoom:19}}),
-  hybrid: [
+               {{attribution:'© Esri © USGS', maxZoom:19}}),
+  hybrid:    [
     L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}',
       {{attribution:'© Esri © USGS', maxZoom:19}}),
     L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{{z}}/{{y}}/{{x}}',
       {{opacity:0.7, maxZoom:19}})
   ],
-  osm: L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png',
-    {{attribution:'© OpenStreetMap contributors', maxZoom:19}})
+  osm:       L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png',
+               {{attribution:'© OpenStreetMap contributors', maxZoom:19}})
 }};
 let activeBmLayers = [];
 function setBasemap(key) {{
   activeBmLayers.forEach(l => map.removeLayer(l));
   activeBmLayers = [];
   const bm = BASEMAPS[key];
-  if (Array.isArray(bm)) {{ bm.forEach(l => {{ l.addTo(map); l.bringToBack(); activeBmLayers.push(l); }}); }}
-  else {{ bm.addTo(map); bm.bringToBack(); activeBmLayers.push(bm); }}
+  const arr = Array.isArray(bm) ? bm : [bm];
+  arr.forEach(l => {{ l.addTo(map); l.bringToBack(); activeBmLayers.push(l); }});
   document.querySelectorAll('.bm-btn').forEach(b => b.classList.toggle('on', b.dataset.bm===key));
 }}
 setBasemap('dark');
 
-// ── Filter state ─────────────────────────────────────────────────────────────
-// Datasets: on by default (show all). Click to toggle off.
-const dsActive = Object.fromEntries(Object.keys(DS_COLORS).map(k => [k, false]));
-
-// Satellites: OFF by default (additive). No sat buttons on = show all.
-// When any sat is turned on, show ONLY those turned on.
+// ── Filter state ──────────────────────────────────────────────────────────────
 const satActive = {{}};
 document.querySelectorAll('.sat-btn').forEach(b => satActive[b.dataset.sat] = false);
 
-let yearLo = YEAR_MIN, yearHi = YEAR_MAX;
-let yearFiltering = false;   // true only when slider has been moved from defaults
-let searchQ = '';
+let yearLo = YEAR_MIN, yearHi = YEAR_MAX, yearFiltering = false, searchQ = '';
 
-function anySatOn() {{
-  return Object.values(satActive).some(v => v);
-}}
+function anySatOn() {{ return Object.values(satActive).some(Boolean); }}
 
-// ── Layer management ──────────────────────────────────────────────────────────
+// ── Layers ────────────────────────────────────────────────────────────────────
 const layers = {{}};
-let visibleFeats = [];  // flat list of currently-shown features for hit-testing
+let visibleFeats = [];
 
 function styleFor(ds) {{
   const c = DS_COLORS[ds] || '#fff';
@@ -451,64 +499,74 @@ function styleFor(ds) {{
 }}
 function styleHover(ds) {{
   const c = DS_COLORS[ds] || '#fff';
-  return {{color:c, weight:2, fillColor:c, fillOpacity:0.45}};
+  return {{color:c, weight:2, fillColor:c, fillOpacity:0.42}};
 }}
 
 function buildLayers() {{
   Object.values(layers).forEach(l => {{ try {{ map.removeLayer(l); }} catch(e) {{}} }});
   visibleFeats = [];
-  let shown = 0;
-  const satFiltering = anySatOn();
 
-  Object.keys(DS_COLORS).forEach(ds => {{
-    if (!dsActive[ds]) return;
+  if (!anySatOn()) {{
+    updateCounter(0);
+    return;
+  }}
 
-    const feats = GEOJSON.features.filter(f => {{
-      const p = f.properties;
-      if (p.dataset !== ds) return false;
-      if (satFiltering && !satActive[p.satellite]) return false;
-      if (yearFiltering && p.year !== null && (p.year < yearLo || p.year > yearHi)) return false;
-      if (searchQ) {{
-        const q = searchQ.toLowerCase();
-        if (!p.entityId.toLowerCase().includes(q) &&
-            !(p.displayId||'').toLowerCase().includes(q)) return false;
-      }}
-      return true;
-    }});
+  const feats = GEOJSON.features.filter(f => {{
+    const p = f.properties;
+    if (!satActive[p.satellite]) return false;
+    if (yearFiltering && p.year !== null && (p.year < yearLo || p.year > yearHi)) return false;
+    if (searchQ) {{
+      const q = searchQ.toLowerCase();
+      if (!p.entityId.toLowerCase().includes(q) && !(p.displayId||'').toLowerCase().includes(q)) return false;
+    }}
+    return true;
+  }});
 
-    layers[ds] = L.geoJSON({{type:'FeatureCollection', features:feats}}, {{
+  // Group by dataset for colour coding
+  const byDs = {{}};
+  feats.forEach(f => {{
+    const ds = f.properties.dataset;
+    if (!byDs[ds]) byDs[ds] = [];
+    byDs[ds].push(f);
+  }});
+
+  Object.entries(byDs).forEach(([ds, dsFeats]) => {{
+    layers[ds] = L.geoJSON({{type:'FeatureCollection', features:dsFeats}}, {{
       style: () => styleFor(ds),
       onEachFeature: (feat, layer) => {{
         layer.on('mouseover', () => layer.setStyle(styleHover(feat.properties.dataset)));
         layer.on('mouseout',  () => layer.setStyle(styleFor(feat.properties.dataset)));
       }}
-    }});
-    layers[ds].addTo(map);
-    visibleFeats = visibleFeats.concat(feats);
-    shown += feats.length;
+    }}).addTo(map);
   }});
 
-  const counter = document.getElementById('counter');
-  counter.textContent = shown.toLocaleString() + ' scenes';
-  counter.classList.toggle('has-scenes', shown > 0);
+  visibleFeats = feats;
+  updateCounter(feats.length);
+}}
+
+function updateCounter(n) {{
+  const el = document.getElementById('counter');
+  const total = GEOJSON.features.length;
+  el.textContent = n.toLocaleString() + ' of ' + total.toLocaleString() + ' scenes';
+  el.classList.toggle('has-scenes', n > 0);
+  document.getElementById('empty-state').classList.toggle('hidden', n > 0 || anySatOn());
 }}
 
 buildLayers();
 
-// ── Multi-scene popup on map click ────────────────────────────────────────────
-function ptInPoly(latlng, geom) {{
-  const pt = [latlng.lng, latlng.lat];
+// ── Multi-scene popup ─────────────────────────────────────────────────────────
+function ptInPoly(ll, geom) {{
+  const pt = [ll.lng, ll.lat];
   function inRing(pt, ring) {{
     let inside = false;
-    for (let i=0, j=ring.length-1; i<ring.length; j=i++) {{
-      const xi=ring[i][0], yi=ring[i][1], xj=ring[j][0], yj=ring[j][1];
-      if (((yi>pt[1])!==(yj>pt[1])) && (pt[0] < (xj-xi)*(pt[1]-yi)/(yj-yi)+xi))
-        inside = !inside;
+    for (let i=0,j=ring.length-1;i<ring.length;j=i++) {{
+      const xi=ring[i][0],yi=ring[i][1],xj=ring[j][0],yj=ring[j][1];
+      if (((yi>pt[1])!==(yj>pt[1])) && pt[0]<(xj-xi)*(pt[1]-yi)/(yj-yi)+xi) inside=!inside;
     }}
     return inside;
   }}
   function testPoly(rings) {{
-    if (!inRing(pt, rings[0])) return false;
+    if (!inRing(pt,rings[0])) return false;
     for (let i=1;i<rings.length;i++) if (inRing(pt,rings[i])) return false;
     return true;
   }}
@@ -518,56 +576,54 @@ function ptInPoly(latlng, geom) {{
 }}
 
 function polyArea(geom) {{
-  function ringArea(ring) {{
+  function ra(ring) {{
     let a=0;
-    for (let i=0,j=ring.length-1;i<ring.length;j=i++)
-      a += (ring[j][0]+ring[i][0])*(ring[j][1]-ring[i][1]);
+    for (let i=0,j=ring.length-1;i<ring.length;j=i++) a+=(ring[j][0]+ring[i][0])*(ring[j][1]-ring[i][1]);
     return Math.abs(a/2);
   }}
-  if (geom.type==='Polygon') return ringArea(geom.coordinates[0]);
-  if (geom.type==='MultiPolygon') return geom.coordinates.reduce((s,p)=>s+ringArea(p[0]),0);
+  if (geom.type==='Polygon') return ra(geom.coordinates[0]);
+  if (geom.type==='MultiPolygon') return geom.coordinates.reduce((s,p)=>s+ra(p[0]),0);
   return 0;
 }}
 
-const popup = L.popup({{maxWidth:300, className:'multi-popup', offset:L.point(0,0), autoPan:true}});
-let puFeats=[], puIdx=0;
-let highlightLayer = null;
+const popup = L.popup({{maxWidth:290, autoPan:true, closeButton:true}});
+let puFeats=[], puIdx=0, highlightLayer=null;
 
 function highlightFootprint(feat) {{
-  if (highlightLayer) {{ map.removeLayer(highlightLayer); highlightLayer = null; }}
+  if (highlightLayer) {{ map.removeLayer(highlightLayer); highlightLayer=null; }}
   if (!feat) return;
-  const c = DS_COLORS[feat.properties.dataset] || '#fff';
+  const c = DS_COLORS[feat.properties.dataset]||'#fff';
   highlightLayer = L.geoJSON(feat, {{
-    style: {{color:'#fff', weight:2.5, fillColor:c, fillOpacity:0, dashArray:'6 4', className:'selected-footprint'}}
+    style:{{color:'#ffffff', weight:2, fillColor:c, fillOpacity:0, dashArray:'5 4'}}
   }}).addTo(map);
 }}
 
 function renderPopup() {{
   highlightFootprint(puFeats[puIdx]);
-  const p = puFeats[puIdx].properties;
-  const dsColor = DS_COLORS[p.dataset] || '#fff';
-  const dsShort = p.datasetLabel.split('—')[0].trim();
+  const p   = puFeats[puIdx].properties;
+  const c   = DS_COLORS[p.dataset]||'#fff';
   const date = p.acquisitionDate ? p.acquisitionDate.slice(0,10) : '—';
-  const browseHtml = p.browse
-    ? `<img src="${{p.browse}}" onerror="this.style.display='none'" title="View full image" onclick="window.open('${{p.browse}}','_blank')">`
+  const dsShort = p.datasetLabel.split('—')[0].trim();
+  const imgHtml = p.browse
+    ? `<img class="pu-img" src="${{p.browse}}" onerror="this.style.display='none'" title="Click to view full image" onclick="window.open('${{p.browse}}','_blank')">`
     : '';
   const nav = puFeats.length > 1 ? `
     <div class="pu-nav">
       <button id="pu-prev" ${{puIdx===0?'disabled':''}}>← Prev</button>
-      <span class="pu-count">${{puIdx+1}} of ${{puFeats.length}}</span>
+      <span class="pu-count">${{puIdx+1}} / ${{puFeats.length}}</span>
       <button id="pu-next" ${{puIdx===puFeats.length-1?'disabled':''}}>Next →</button>
     </div>` : '';
 
   popup.setContent(`<div class="pu">
-    ${{browseHtml}}
+    ${{imgHtml}}
     <h3>${{p.entityId}}</h3>
     <div class="pu-tags">
-      <span class="pu-tag sat">🛸 ${{p.satellite}}</span>
-      <span class="pu-tag" style="color:${{dsColor}}aa;border-color:${{dsColor}}33">${{dsShort}}</span>
+      <span class="pu-tag sat">${{p.satellite}}</span>
+      <span class="pu-tag" style="color:${{c}}99;border-color:${{c}}28">${{dsShort}}</span>
     </div>
     <div class="meta">📅 ${{date}}</div>
     <div class="pu-footer">
-      <a href="${{p.earthExplorerUrl}}" target="_blank">EarthExplorer →</a>
+      <a href="${{p.earthExplorerUrl}}" target="_blank">EarthExplorer ↗</a>
       ${{nav}}
     </div>
   </div>`);
@@ -583,26 +639,14 @@ function renderPopup() {{
 map.on('click', e => {{
   const hits = visibleFeats.filter(f => ptInPoly(e.latlng, f.geometry));
   if (!hits.length) return;
-  // Smallest area first (most specific scene on top)
-  hits.sort((a,b) => polyArea(a.geometry) - polyArea(b.geometry));
-  puFeats = hits;
-  puIdx   = 0;
+  hits.sort((a,b) => polyArea(a.geometry)-polyArea(b.geometry));
+  puFeats=hits; puIdx=0;
   popup.setLatLng(e.latlng).addTo(map);
   renderPopup();
 }});
-map.on('popupclose', () => {{ if (highlightLayer) {{ map.removeLayer(highlightLayer); highlightLayer = null; }} }});
+map.on('popupclose', () => {{ if (highlightLayer) {{ map.removeLayer(highlightLayer); highlightLayer=null; }} }});
 
-// ── Dataset buttons ───────────────────────────────────────────────────────────
-document.querySelectorAll('.ds-btn').forEach(btn => {{
-  btn.addEventListener('click', () => {{
-    const ds = btn.dataset.ds;
-    dsActive[ds] = !dsActive[ds];
-    btn.classList.toggle('on', dsActive[ds]);
-    buildLayers();
-  }});
-}});
-
-// ── Satellite buttons (additive) ──────────────────────────────────────────────
+// ── Satellite buttons ─────────────────────────────────────────────────────────
 document.querySelectorAll('.sat-btn').forEach(btn => {{
   btn.addEventListener('click', () => {{
     const s = btn.dataset.sat;
@@ -611,69 +655,66 @@ document.querySelectorAll('.sat-btn').forEach(btn => {{
     buildLayers();
   }});
 }});
+document.getElementById('sat-all').addEventListener('click', () => {{
+  Object.keys(satActive).forEach(k => satActive[k] = true);
+  document.querySelectorAll('.sat-btn').forEach(b => b.classList.add('on'));
+  buildLayers();
+}});
+document.getElementById('sat-none').addEventListener('click', () => {{
+  Object.keys(satActive).forEach(k => satActive[k] = false);
+  document.querySelectorAll('.sat-btn').forEach(b => b.classList.remove('on'));
+  buildLayers();
+}});
 
 // ── Year slider ───────────────────────────────────────────────────────────────
-const rangeLo = document.getElementById('range-lo');
-const rangeHi = document.getElementById('range-hi');
-const thumbLo = document.getElementById('thumb-lo');
-const thumbHi = document.getElementById('thumb-hi');
-const fill    = document.getElementById('slider-fill');
+const rangeLo=document.getElementById('range-lo'), rangeHi=document.getElementById('range-hi');
+const thumbLo=document.getElementById('thumb-lo'), thumbHi=document.getElementById('thumb-hi');
+const fill=document.getElementById('slider-fill');
 
 function updateSlider() {{
-  const lo = parseInt(rangeLo.value), hi = parseInt(rangeHi.value);
-  const pct = v => (v - YEAR_MIN) / (YEAR_MAX - YEAR_MIN) * 100;
-  fill.style.left  = pct(lo) + '%';
-  fill.style.width = (pct(hi) - pct(lo)) + '%';
-  thumbLo.style.left = pct(lo) + '%';
-  thumbHi.style.left = pct(hi) + '%';
-  document.getElementById('yr-lo').textContent = lo;
-  document.getElementById('yr-hi').textContent = hi;
-  const active = lo > YEAR_MIN || hi < YEAR_MAX;
-  fill.classList.toggle('active', active);
-  thumbLo.classList.toggle('active', active);
-  thumbHi.classList.toggle('active', active);
+  const lo=parseInt(rangeLo.value), hi=parseInt(rangeHi.value);
+  const pct=v=>(v-YEAR_MIN)/(YEAR_MAX-YEAR_MIN)*100;
+  fill.style.left=pct(lo)+'%'; fill.style.width=(pct(hi)-pct(lo))+'%';
+  thumbLo.style.left=pct(lo)+'%'; thumbHi.style.left=pct(hi)+'%';
+  document.getElementById('yr-lo').textContent=lo;
+  document.getElementById('yr-hi').textContent=hi;
+  const active=lo>YEAR_MIN||hi<YEAR_MAX;
+  fill.classList.toggle('active',active);
+  thumbLo.classList.toggle('active',active);
+  thumbHi.classList.toggle('active',active);
 }}
-
-rangeLo.addEventListener('input', () => {{
-  if (parseInt(rangeLo.value) > parseInt(rangeHi.value)) rangeLo.value = rangeHi.value;
-  yearLo = parseInt(rangeLo.value);
-  yearFiltering = yearLo > YEAR_MIN || yearHi < YEAR_MAX;
+rangeLo.addEventListener('input',()=>{{
+  if(parseInt(rangeLo.value)>parseInt(rangeHi.value)) rangeLo.value=rangeHi.value;
+  yearLo=parseInt(rangeLo.value); yearFiltering=yearLo>YEAR_MIN||yearHi<YEAR_MAX;
   updateSlider(); buildLayers();
 }});
-rangeHi.addEventListener('input', () => {{
-  if (parseInt(rangeHi.value) < parseInt(rangeLo.value)) rangeHi.value = rangeLo.value;
-  yearHi = parseInt(rangeHi.value);
-  yearFiltering = yearLo > YEAR_MIN || yearHi < YEAR_MAX;
+rangeHi.addEventListener('input',()=>{{
+  if(parseInt(rangeHi.value)<parseInt(rangeLo.value)) rangeHi.value=rangeLo.value;
+  yearHi=parseInt(rangeHi.value); yearFiltering=yearLo>YEAR_MIN||yearHi<YEAR_MAX;
   updateSlider(); buildLayers();
 }});
 updateSlider();
 
-// ── Reset ──────────────────────────────────────────────────────────────────────
-document.getElementById('reset-filters').addEventListener('click', () => {{
-  // Datasets back on
-  Object.keys(dsActive).forEach(k => dsActive[k] = false);
-  document.querySelectorAll('.ds-btn').forEach(b => b.classList.remove('on'));
-  // Sats back off
-  Object.keys(satActive).forEach(k => satActive[k] = false);
+// ── Reset ─────────────────────────────────────────────────────────────────────
+document.getElementById('reset-btn').addEventListener('click', () => {{
+  Object.keys(satActive).forEach(k => satActive[k]=false);
   document.querySelectorAll('.sat-btn').forEach(b => b.classList.remove('on'));
-  // Year back to full range
-  rangeLo.value = YEAR_MIN; rangeHi.value = YEAR_MAX;
-  yearLo = YEAR_MIN; yearHi = YEAR_MAX; yearFiltering = false;
+  rangeLo.value=YEAR_MIN; rangeHi.value=YEAR_MAX;
+  yearLo=YEAR_MIN; yearHi=YEAR_MAX; yearFiltering=false;
   updateSlider();
-  searchQ = ''; document.getElementById('search').value = '';
+  searchQ=''; document.getElementById('search').value='';
   buildLayers();
 }});
 
-// ── Basemap buttons ───────────────────────────────────────────────────────────
-document.querySelectorAll('.bm-btn').forEach(btn => {{
-  btn.addEventListener('click', () => setBasemap(btn.dataset.bm));
-}});
+// ── Basemap ───────────────────────────────────────────────────────────────────
+document.querySelectorAll('.bm-btn').forEach(btn =>
+  btn.addEventListener('click', () => setBasemap(btn.dataset.bm)));
 
-// ── Search ──────────────────────────────────────────────────────────────────
+// ── Search ────────────────────────────────────────────────────────────────────
 let st;
 document.getElementById('search').addEventListener('input', e => {{
   clearTimeout(st);
-  st = setTimeout(() => {{ searchQ = e.target.value.trim(); buildLayers(); }}, 300);
+  st=setTimeout(()=>{{ searchQ=e.target.value.trim(); buildLayers(); }},300);
 }});
 </script>
 </body>
