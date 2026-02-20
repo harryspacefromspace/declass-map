@@ -2,32 +2,35 @@
 """
 fetch_and_build.py
 
-Reads available scene entity IDs from scenes.db (maintained by the monitoring
-workflow), fetches their spatial footprints from the USGS M2M API, and builds
-a self-contained index.html map.
-
-This is fast because we only query metadata for scenes already known to be
-available — typically a few thousand — rather than scanning the full archive.
+Searches USGS M2M for all downloadable declassified scenes using the same
+filter approach as monitor.py, extracts spatial bounds from the results,
+and builds a self-contained index.html map.
 """
 
 import os
 import json
 import time
-import sqlite3
 import requests
 from datetime import datetime
 
 M2M_URL = "https://m2m.cr.usgs.gov/api/api/json/stable/"
-DB_PATH  = "scenes.db"
+
+# Dataset names and their "Download Available = Y" filter IDs
+# These match monitor.py exactly
+DATASETS = {
+    "corona2":   "5e839feb64cee663",
+    "declassii":  "5e839ff8ba6eead0",
+    "declassiii": "5e7c41f38f5a8fa1",
+}
 
 DATASET_LABELS = {
-    "corona2":   "Declass I — CORONA/ARGON/LANYARD",
+    "corona2":    "Declass I — CORONA/ARGON/LANYARD",
     "declassii":  "Declass II — GAMBIT/HEXAGON",
     "declassiii": "Declass III — HEXAGON",
 }
 
 DATASET_COLORS = {
-    "corona2":   "#00ff88",
+    "corona2":    "#00ff88",
     "declassii":  "#00aaff",
     "declassiii": "#ff9900",
 }
@@ -59,130 +62,72 @@ def logout(api_key):
     print("  Logged out")
 
 
-def fetch_scene_metadata_batch(api_key, dataset, entity_ids):
+def search_available(api_key, dataset, filter_id):
     """
-    Fetch spatial bounds and metadata for a list of entity IDs.
-    Uses scene-list-add / scene-list-get to look up specific scenes by ID.
-    Returns a list of scene result dicts.
+    Search for all scenes with Download Available = Y.
+    Mirrors monitor.py's search_dataset() exactly — these results
+    include spatialBounds in each scene object.
     """
-    list_name = f"mapbuild_{int(time.time())}"
+    all_scenes = []
+    starting  = 1
+    batch     = 10000
 
-    # Add scenes to a temporary named list
-    add_resp = requests.post(
-        M2M_URL + "scene-list-add",
-        json={
-            "listId":      list_name,
-            "datasetName": dataset,
-            "entityIds":   entity_ids,
-        },
-        headers={"X-Auth-Token": api_key},
-        timeout=60,
-    )
-    add_resp.raise_for_status()
-    add_data = add_resp.json()
-    if add_data.get("errorCode"):
-        print(f"    scene-list-add error: {add_data['errorMessage']}")
-        return []
-
-    # Retrieve the scenes (includes spatialBounds)
-    get_resp = requests.post(
-        M2M_URL + "scene-list-get",
-        json={
-            "listId":      list_name,
-            "datasetName": dataset,
-        },
-        headers={"X-Auth-Token": api_key},
-        timeout=120,
-    )
-    get_resp.raise_for_status()
-    get_data = get_resp.json()
-    if get_data.get("errorCode"):
-        print(f"    scene-list-get error: {get_data['errorMessage']}")
-        return []
-
-    results = get_data.get("data", {})
-    if isinstance(results, dict):
-        results = results.get("results", [])
-
-    # Clean up the temporary list
-    try:
-        requests.post(
-            M2M_URL + "scene-list-remove",
-            json={"listId": list_name},
+    while True:
+        resp = requests.post(
+            M2M_URL + "scene-search",
+            json={
+                "datasetName":   dataset,
+                "maxResults":    batch,
+                "startingNumber": starting,
+                "sceneFilter": {
+                    "metadataFilter": {
+                        "filterType": "value",
+                        "filterId":   filter_id,
+                        "value":      "Y",
+                    }
+                },
+            },
             headers={"X-Auth-Token": api_key},
-            timeout=10,
+            timeout=120,
         )
-    except Exception:
-        pass
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("errorCode"):
+            print(f"    API error: {data['errorMessage']}")
+            break
 
-    return results or []
+        scenes = data.get("data", {}).get("results", [])
+        if not scenes:
+            break
 
+        all_scenes.extend(scenes)
+        print(f"    Retrieved {len(all_scenes):,} scenes...")
 
-# ---------------------------------------------------------------------------
-# Database
-# ---------------------------------------------------------------------------
+        if len(scenes) < batch:
+            break
+        starting += batch
+        time.sleep(0.5)
 
-def load_scenes_from_db(db_path):
-    """
-    Read all available scenes from scenes.db.
-    Returns: { dataset_name: [ {entity_id, acquisition_date}, ... ] }
-    """
-    if not os.path.exists(db_path):
-        raise FileNotFoundError(
-            f"scenes.db not found at '{db_path}'. "
-            "The monitoring workflow must run at least once before the map can be built."
-        )
-
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
-
-    cur.execute("PRAGMA table_info(scenes)")
-    cols = {row["name"] for row in cur.fetchall()}
-    print(f"  scenes.db columns: {sorted(cols)}")
-
-    date_col = "acquisition_date" if "acquisition_date" in cols else None
-
-    query = "SELECT entity_id, dataset"
-    if date_col:
-        query += f", {date_col}"
-    query += " FROM scenes"
-
-    cur.execute(query)
-    rows = cur.fetchall()
-    conn.close()
-
-    by_dataset = {}
-    for row in rows:
-        ds = row["dataset"]
-        by_dataset.setdefault(ds, []).append({
-            "entity_id":       row["entity_id"],
-            "acquisition_date": row[date_col] if date_col else "",
-        })
-
-    for ds, scenes in by_dataset.items():
-        print(f"  {DATASET_LABELS.get(ds, ds)}: {len(scenes):,} scenes in db")
-
-    return by_dataset
+    return all_scenes
 
 
 # ---------------------------------------------------------------------------
 # GeoJSON conversion
 # ---------------------------------------------------------------------------
 
-def scene_to_feature(scene, dataset, db_entry):
+def scene_to_feature(scene, dataset):
     geom = scene.get("spatialBounds") or scene.get("spatialCoverage")
     if not geom or not isinstance(geom, dict) or "type" not in geom:
         return None
 
-    entity_id = scene.get("entityId", db_entry.get("entity_id", ""))
+    entity_id = scene.get("entityId", "")
 
     acq = ""
     tc = scene.get("temporalCoverage")
     if isinstance(tc, dict):
         acq = tc.get("startDate", "")
     if not acq:
-        acq = scene.get("acquisitionDate", "") or db_entry.get("acquisition_date", "")
+        acq = scene.get("acquisitionDate", "")
 
     thumbnail = ""
     browse = scene.get("browse")
@@ -208,31 +153,6 @@ def scene_to_feature(scene, dataset, db_entry):
     }
 
 
-def fetch_footprints(api_key, dataset, db_scenes):
-    """Fetch footprints for all scenes in a dataset, in batches of 250."""
-    entity_ids = [s["entity_id"] for s in db_scenes]
-    db_lookup  = {s["entity_id"]: s for s in db_scenes}
-
-    features   = []
-    batch_size = 250
-
-    for i in range(0, len(entity_ids), batch_size):
-        batch = entity_ids[i:i + batch_size]
-        print(f"    Fetching {i + 1}–{min(i + batch_size, len(entity_ids))} of {len(entity_ids)}...")
-
-        scenes = fetch_scene_metadata_batch(api_key, dataset, batch)
-        for scene in scenes:
-            eid = scene.get("entityId", "")
-            f = scene_to_feature(scene, dataset, db_lookup.get(eid, {}))
-            if f:
-                features.append(f)
-
-        time.sleep(0.3)
-
-    print(f"    Footprints retrieved: {len(features)} of {len(entity_ids)}")
-    return features
-
-
 # ---------------------------------------------------------------------------
 # HTML builder
 # ---------------------------------------------------------------------------
@@ -245,16 +165,16 @@ def build_html(geojson):
     ds_colors_json = json.dumps(DATASET_COLORS)
 
     counts_html = " &nbsp;|&nbsp; ".join(
-        f'<span class="dot" style="background:{DATASET_COLORS.get(ds,"#fff")}"></span>'
-        f'{DATASET_LABELS.get(ds,ds).split("—")[0].strip()}: '
-        f'<strong>{counts.get(ds,0):,}</strong>'
+        f'<span class="dot" style="background:{DATASET_COLORS[ds]}"></span>'
+        f'{DATASET_LABELS[ds].split("—")[0].strip()}: '
+        f'<strong>{counts.get(ds, 0):,}</strong>'
         for ds in DATASET_LABELS if ds in counts
     )
 
     filter_buttons = "\n    ".join(
         f'<button class="filter-btn active" data-ds="{ds}" '
-        f'style="--c:{DATASET_COLORS.get(ds,"#fff")}">'
-        f'{DATASET_LABELS.get(ds,ds).split("—")[0].strip()}</button>'
+        f'style="--c:{DATASET_COLORS[ds]}">'
+        f'{DATASET_LABELS[ds].split("—")[0].strip()}</button>'
         for ds in DATASET_LABELS if ds in counts
     )
 
@@ -340,8 +260,7 @@ function buildLayers(q){{
 buildLayers('');
 document.querySelectorAll('.filter-btn').forEach(btn=>{{
   btn.addEventListener('click',()=>{{
-    const ds=btn.dataset.ds;
-    visible[ds]=!visible[ds];
+    const ds=btn.dataset.ds;visible[ds]=!visible[ds];
     btn.classList.toggle('inactive',!visible[ds]);
     buildLayers(document.getElementById('search').value.trim());
   }});
@@ -363,20 +282,21 @@ def main():
     if not username or not token:
         raise RuntimeError("M2M_USERNAME and M2M_TOKEN environment variables must be set")
 
-    print(f"Reading available scenes from {DB_PATH}...")
-    by_dataset = load_scenes_from_db(DB_PATH)
-    if not by_dataset:
-        raise RuntimeError("scenes.db is empty — run the monitoring workflow first")
-
-    print("\nLogging in to USGS M2M API...")
+    print("Logging in to USGS M2M API...")
     api_key = login(username, token)
 
     all_features = []
     try:
-        for dataset, db_scenes in by_dataset.items():
-            label = DATASET_LABELS.get(dataset, dataset)
-            print(f"\n  {label} ({len(db_scenes):,} scenes)...")
-            all_features.extend(fetch_footprints(api_key, dataset, db_scenes))
+        for dataset, filter_id in DATASETS.items():
+            label = DATASET_LABELS[dataset]
+            print(f"\n  {label}...")
+            scenes = search_available(api_key, dataset, filter_id)
+            print(f"  Converting {len(scenes):,} scenes to GeoJSON features...")
+            for scene in scenes:
+                f = scene_to_feature(scene, dataset)
+                if f:
+                    all_features.append(f)
+            print(f"  {sum(1 for f in all_features if f['properties']['dataset'] == dataset):,} features with spatial bounds")
     finally:
         logout(api_key)
 
@@ -395,9 +315,11 @@ def main():
         },
     }
 
+    print(f"\nTotal features: {len(all_features):,}")
+
     with open("available_scenes.geojson", "w") as f:
         json.dump(geojson, f)
-    print("\nSaved available_scenes.geojson")
+    print("Saved available_scenes.geojson")
 
     with open("index.html", "w", encoding="utf-8") as f:
         f.write(build_html(geojson))
