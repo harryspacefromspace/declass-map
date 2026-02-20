@@ -22,13 +22,27 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install requests
+        run: pip install requests staticmap Pillow
+
+      - name: Generate config.json from secrets
+        run: |
+          cat > config.json << 'CONFIGEOF'
+          {
+            "usgs": {
+              "username": "${{ secrets.M2M_USERNAME }}",
+              "token": "${{ secrets.M2M_TOKEN }}"
+            },
+            "database": "scenes.db",
+            "notifications": {
+              "telegram": {
+                "enabled": false
+              }
+            }
+          }
+          CONFIGEOF
 
       - name: Step 1 — Run monitoring script (updates scenes.db)
         run: python monitor.py
-        env:
-          M2M_USERNAME: ${{ secrets.M2M_USERNAME }}
-          M2M_TOKEN: ${{ secrets.M2M_TOKEN }}
 
       - name: Step 2 — Build map from scenes.db
         run: python fetch_and_build.py
