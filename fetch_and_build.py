@@ -13,19 +13,18 @@ from datetime import datetime
 
 M2M_URL = "https://m2m.cr.usgs.gov/api/api/json/stable/"
 
-DATASETS = ["DECLASSI", "DECLASSII", "DECLASSIII"]
+# The M2M API uses non-obvious internal dataset names.
+# These were confirmed working from the USGS monitoring project.
+# "DECLASSI" in EarthExplorer = "corona2" in the M2M API.
+# We use dataset-search at runtime to confirm DECLASSII and DECLASSIII names.
+DECLASS_SEARCH_TERMS = ["corona", "declass", "gambit", "hexagon", "argon", "lanyard"]
 
-DATASET_LABELS = {
-    "DECLASSI":   "Declass I (CORONA/ARGON/LANYARD 1960–1972)",
-    "DECLASSII":  "Declass II (GAMBIT/HEXAGON 1966–1984)",
-    "DECLASSIII": "Declass III (Additional 1970s–1980s)",
-}
+# Friendly labels keyed by the internal API dataset name (filled at runtime)
+DATASET_LABELS = {}
+DATASET_COLORS = {}
 
-DATASET_COLORS = {
-    "DECLASSI":   "#00ff88",
-    "DECLASSII":  "#00aaff",
-    "DECLASSIII": "#ff9900",
-}
+# Colour palette — assigned in the order datasets are discovered
+COLOR_PALETTE = ["#00ff88", "#00aaff", "#ff9900", "#ff4466", "#cc88ff"]
 
 
 def login(username, token):
@@ -45,6 +44,43 @@ def login(username, token):
 def logout(api_key):
     requests.post(M2M_URL + "logout", headers={"X-Auth-Token": api_key}, timeout=10)
     print("  Logged out")
+
+def discover_datasets(api_key):
+    """Find the actual M2M dataset names for the three declassified collections."""
+    found = {}
+    seen = set()
+
+    for term in DECLASS_SEARCH_TERMS:
+        resp = requests.post(
+            M2M_URL + "dataset-search",
+            json={"datasetName": term},
+            headers={"X-Auth-Token": api_key},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        for ds in (data.get("data") or []):
+            name = ds.get("datasetName", "")
+            alias = ds.get("datasetAlias", "") or ds.get("abstractText", "")
+            if name and name not in seen:
+                seen.add(name)
+                found[name] = alias or name
+                print(f"    Found dataset: {name!r:40s} ({alias})")
+
+    # Filter to just the three declass families
+    declass_datasets = {
+        k: v for k, v in found.items()
+        if any(x in k.lower() or x in v.lower()
+               for x in ["corona", "declass", "gambit", "hexagon", "argon", "lanyard"])
+    }
+
+    print(f"\n  Identified {len(declass_datasets)} declassified datasets:")
+    for i, (name, label) in enumerate(declass_datasets.items()):
+        DATASET_LABELS[name] = label
+        DATASET_COLORS[name] = COLOR_PALETTE[i % len(COLOR_PALETTE)]
+        print(f"    {name} -> {label}")
+
+    return list(declass_datasets.keys())
 
 
 def search_scenes(api_key, dataset, starting_number=1, max_results=50000):
@@ -180,7 +216,7 @@ def build_geojson(features_by_dataset):
         "metadata": {
             "generated": datetime.utcnow().isoformat() + "Z",
             "total": len(features),
-            "counts": {ds: sum(1 for f in features if f["properties"]["dataset"] == ds) for ds in DATASETS},
+            "counts": {ds: sum(1 for f in features if f["properties"]["dataset"] == ds) for ds in features_by_dataset},
         }
     }
 
@@ -193,9 +229,20 @@ def build_html(geojson):
     counts = geojson["metadata"]["counts"]
     
     counts_html = " &nbsp;|&nbsp; ".join(
-        f'<span class="legend-dot" style="background:{DATASET_COLORS[ds]}"></span>{DATASET_LABELS[ds].split("(")[0].strip()}: <strong>{counts.get(ds, 0):,}</strong>'
-        for ds in DATASETS
+        f'<span class="legend-dot" style="background:{DATASET_COLORS[ds]}"></span>'
+        f'{DATASET_LABELS[ds].split("(")[0].strip()}: <strong>{counts.get(ds, 0):,}</strong>'
+        for ds in DATASET_LABELS
     )
+    
+    # Generate filter buttons dynamically from discovered datasets
+    filter_buttons = "\n    ".join(
+        f'<button class="filter-btn active" data-ds="{ds}" style="--btn-color:{DATASET_COLORS[ds]}">'
+        f'{DATASET_LABELS[ds].split("(")[0].strip()}</button>'
+        for ds in DATASET_LABELS
+    )
+    
+    # Colors dict for JS
+    ds_colors_json = json.dumps(DATASET_COLORS)
     
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -270,11 +317,8 @@ def build_html(geojson):
     transition: all 0.15s;
   }}
   
+  .filter-btn {{ color: var(--btn-color, #ccc); }}
   .filter-btn:hover {{ background: #222; border-color: #555; }}
-  .filter-btn.active {{ border-color: currentColor; }}
-  .filter-btn[data-ds="DECLASSI"] {{ color: #00ff88; }}
-  .filter-btn[data-ds="DECLASSII"] {{ color: #00aaff; }}
-  .filter-btn[data-ds="DECLASSIII"] {{ color: #ff9900; }}
   .filter-btn.inactive {{ opacity: 0.4; }}
   
   #search-box {{
@@ -375,9 +419,7 @@ def build_html(geojson):
   <div id="stats">{counts_html} &nbsp;|&nbsp; Updated: <strong>{generated[:10]}</strong></div>
   <div id="controls">
     <input id="search-box" type="text" placeholder="Search entity ID…" />
-    <button class="filter-btn active" data-ds="DECLASSI">Declass I</button>
-    <button class="filter-btn active" data-ds="DECLASSII">Declass II</button>
-    <button class="filter-btn active" data-ds="DECLASSIII">Declass III</button>
+{filter_buttons}
   </div>
 </div>
 
@@ -402,20 +444,21 @@ L.tileLayer('https://{{s}}.basemaps.cartocdn.com/dark_all/{{z}}/{{x}}/{{y}}{{r}}
 
 // Track layers per dataset
 const layers = {{}};
-const visible = {{ DECLASSI: true, DECLASSII: true, DECLASSIII: true }};
+const DS_COLORS = {ds_colors_json};
+const visible = Object.fromEntries(Object.keys(DS_COLORS).map(k => [k, true]));
 
 function styleFor(ds) {{
-  const colors = {{ DECLASSI: '#00ff88', DECLASSII: '#00aaff', DECLASSIII: '#ff9900' }};
-  return {{ color: colors[ds] || '#fff', weight: 1, fillOpacity: 0.12, fillColor: colors[ds] || '#fff' }};
+  const c = DS_COLORS[ds] || '#fff';
+  return {{ color: c, weight: 1, fillOpacity: 0.12, fillColor: c }};
 }}
 
 function buildLayers(filter) {{
   // Remove existing
-  Object.values(layers).forEach(l => map.removeLayer(l));
+  Object.values(layers).forEach(l => {{ try {{ map.removeLayer(l); }} catch(e) {{}} }});
   
   let shown = 0;
   
-  ['DECLASSI', 'DECLASSII', 'DECLASSIII'].forEach(ds => {{
+  Object.keys(DS_COLORS).forEach(ds => {{
     const features = GEOJSON.features.filter(f => {{
       if (f.properties.dataset !== ds) return false;
       if (filter) {{
@@ -491,8 +534,13 @@ def main():
     api_key = login(username, token)
     
     try:
+        print("\nDiscovering declassified dataset names from M2M API...")
+        datasets = discover_datasets(api_key)
+        if not datasets:
+            raise RuntimeError("No declassified datasets found — check M2M access permissions")
+        
         features_by_dataset = {}
-        for dataset in DATASETS:
+        for dataset in datasets:
             features_by_dataset[dataset] = fetch_dataset(api_key, dataset)
     finally:
         logout(api_key)
