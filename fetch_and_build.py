@@ -1,25 +1,24 @@
 #!/usr/bin/env python3
 """
 fetch_and_build.py
-Queries USGS M2M API for all DECLASSI/II/III scenes with downloads available,
-then generates a self-contained map.html with the data baked in.
+
+Reads available scene entity IDs from scenes.db (maintained by the monitoring
+workflow), fetches their spatial footprints from the USGS M2M API, and builds
+a self-contained index.html map.
+
+This is fast because we only query metadata for scenes already known to be
+available — typically a few thousand — rather than scanning the full archive.
 """
 
 import os
 import json
 import time
+import sqlite3
 import requests
 from datetime import datetime
 
 M2M_URL = "https://m2m.cr.usgs.gov/api/api/json/stable/"
-
-# M2M internal dataset names — confirmed working from the USGS monitoring project.
-# EarthExplorer display names like "DECLASSI" do NOT work in the API.
-DATASETS = [
-    "corona2",               # Declass I  — CORONA / ARGON / LANYARD (KH-1 to KH-6, 1960–1972)
-    "5e839ff7d71d4811",      # Declass II — GAMBIT / HEXAGON mapping camera (KH-7 + KH-9, 1966–1984)
-    "5e7c41f3ffaaf662",      # Declass III — HEXAGON (KH-9, 1970s–1980s)
-]
+DB_PATH  = "scenes.db"
 
 DATASET_LABELS = {
     "corona2":          "Declass I — CORONA/ARGON/LANYARD",
@@ -33,6 +32,10 @@ DATASET_COLORS = {
     "5e7c41f3ffaaf662": "#ff9900",
 }
 
+
+# ---------------------------------------------------------------------------
+# M2M helpers
+# ---------------------------------------------------------------------------
 
 def login(username, token):
     resp = requests.post(
@@ -49,172 +52,213 @@ def login(username, token):
 
 
 def logout(api_key):
-    requests.post(M2M_URL + "logout", headers={"X-Auth-Token": api_key}, timeout=10)
+    try:
+        requests.post(M2M_URL + "logout", headers={"X-Auth-Token": api_key}, timeout=10)
+    except Exception:
+        pass
     print("  Logged out")
 
 
-def search_scenes(api_key, dataset, starting_number=1, max_results=50000):
-    """Search for all scenes in a dataset, paginating as needed."""
-    payload = {
-        "datasetName": dataset,
-        "maxResults": min(max_results, 50000),
-        "startingNumber": starting_number,
-        "sceneFilter": {},
-    }
-    resp = requests.post(
-        M2M_URL + "scene-search",
-        json=payload,
-        headers={"X-Auth-Token": api_key},
-        timeout=120,
-    )
-    resp.raise_for_status()
-    data = resp.json()
-    if data.get("errorCode"):
-        raise RuntimeError(f"scene-search error: {data['errorMessage']}")
-    return data["data"]
+def fetch_scene_metadata_batch(api_key, dataset, entity_ids):
+    """
+    Fetch spatial bounds and metadata for a list of entity IDs.
+    Uses scene-list-add / scene-list-get to look up specific scenes by ID.
+    Returns a list of scene result dicts.
+    """
+    list_name = f"mapbuild_{int(time.time())}"
 
-
-def get_download_options(api_key, dataset, entity_ids):
-    """Check which scenes in a batch are available for download."""
-    payload = {
-        "datasetName": dataset,
-        "entityIds": entity_ids,
-    }
-    resp = requests.post(
-        M2M_URL + "download-options",
-        json=payload,
+    # Add scenes to a temporary named list
+    add_resp = requests.post(
+        M2M_URL + "scene-list-add",
+        json={
+            "listId":      list_name,
+            "datasetName": dataset,
+            "entityIds":   entity_ids,
+        },
         headers={"X-Auth-Token": api_key},
         timeout=60,
     )
-    resp.raise_for_status()
-    data = resp.json()
-    if data.get("errorCode"):
-        print(f"    download-options error: {data['errorMessage']}")
-        return {}
-    
-    # Build map of entityId -> available
-    result = {}
-    for item in (data.get("data") or []):
-        eid = item.get("entityId")
-        if eid and item.get("available"):
-            result[eid] = True
-    return result
+    add_resp.raise_for_status()
+    add_data = add_resp.json()
+    if add_data.get("errorCode"):
+        print(f"    scene-list-add error: {add_data['errorMessage']}")
+        return []
+
+    # Retrieve the scenes (includes spatialBounds)
+    get_resp = requests.post(
+        M2M_URL + "scene-list-get",
+        json={
+            "listId":      list_name,
+            "datasetName": dataset,
+        },
+        headers={"X-Auth-Token": api_key},
+        timeout=120,
+    )
+    get_resp.raise_for_status()
+    get_data = get_resp.json()
+    if get_data.get("errorCode"):
+        print(f"    scene-list-get error: {get_data['errorMessage']}")
+        return []
+
+    results = get_data.get("data", {})
+    if isinstance(results, dict):
+        results = results.get("results", [])
+
+    # Clean up the temporary list
+    try:
+        requests.post(
+            M2M_URL + "scene-list-remove",
+            json={"listId": list_name},
+            headers={"X-Auth-Token": api_key},
+            timeout=10,
+        )
+    except Exception:
+        pass
+
+    return results or []
 
 
-def fetch_dataset(api_key, dataset):
-    """Fetch all downloadable scenes with spatial bounds for one dataset."""
-    print(f"\n  Dataset: {dataset}")
-    
-    all_scenes = []
-    starting = 1
-    batch_size = 5000
-    
-    while True:
-        print(f"    Searching scenes {starting}–{starting + batch_size - 1}...")
-        result = search_scenes(api_key, dataset, starting_number=starting, max_results=batch_size)
-        scenes = result.get("results", [])
-        total = result.get("totalHits", 0)
-        
-        if not scenes:
-            break
-        
-        # Filter to scenes that have spatial data
-        scenes_with_bounds = [s for s in scenes if s.get("spatialBounds") or s.get("spatialCoverage")]
-        
-        # Check download availability in batches of 250
-        entity_ids = [s["entityId"] for s in scenes_with_bounds]
-        available_set = {}
-        for i in range(0, len(entity_ids), 250):
-            chunk = entity_ids[i:i + 250]
-            available_set.update(get_download_options(api_key, dataset, chunk))
-            time.sleep(0.5)  # be polite to the API
-        
-        for scene in scenes_with_bounds:
-            eid = scene["entityId"]
-            if eid in available_set:
-                all_scenes.append(scene)
-        
-        print(f"    Batch: {len(scenes)} scenes, {len(available_set)} available for download")
-        
-        if starting + batch_size > total:
-            break
-        starting += batch_size
-        time.sleep(1)
-    
-    print(f"    Total available: {len(all_scenes)}")
-    return all_scenes
+# ---------------------------------------------------------------------------
+# Database
+# ---------------------------------------------------------------------------
+
+def load_scenes_from_db(db_path):
+    """
+    Read all available scenes from scenes.db.
+    Returns: { dataset_name: [ {entity_id, acquisition_date}, ... ] }
+    """
+    if not os.path.exists(db_path):
+        raise FileNotFoundError(
+            f"scenes.db not found at '{db_path}'. "
+            "The monitoring workflow must run at least once before the map can be built."
+        )
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+
+    cur.execute("PRAGMA table_info(scenes)")
+    cols = {row["name"] for row in cur.fetchall()}
+    print(f"  scenes.db columns: {sorted(cols)}")
+
+    date_col = "acquisition_date" if "acquisition_date" in cols else None
+
+    query = "SELECT entity_id, dataset"
+    if date_col:
+        query += f", {date_col}"
+    query += " FROM scenes"
+
+    cur.execute(query)
+    rows = cur.fetchall()
+    conn.close()
+
+    by_dataset = {}
+    for row in rows:
+        ds = row["dataset"]
+        by_dataset.setdefault(ds, []).append({
+            "entity_id":       row["entity_id"],
+            "acquisition_date": row[date_col] if date_col else "",
+        })
+
+    for ds, scenes in by_dataset.items():
+        print(f"  {DATASET_LABELS.get(ds, ds)}: {len(scenes):,} scenes in db")
+
+    return by_dataset
 
 
-def scene_to_feature(scene, dataset):
-    """Convert a M2M scene result to a GeoJSON feature."""
-    # Get geometry - prefer spatialBounds (polygon) over simple bbox
+# ---------------------------------------------------------------------------
+# GeoJSON conversion
+# ---------------------------------------------------------------------------
+
+def scene_to_feature(scene, dataset, db_entry):
     geom = scene.get("spatialBounds") or scene.get("spatialCoverage")
-    if not geom:
+    if not geom or not isinstance(geom, dict) or "type" not in geom:
         return None
-    
-    # Normalise geometry - M2M returns it as a GeoJSON-compatible dict
-    if isinstance(geom, dict) and "type" in geom:
-        geometry = geom
-    else:
-        return None
-    
-    props = {
-        "entityId": scene.get("entityId", ""),
-        "dataset": dataset,
-        "datasetLabel": DATASET_LABELS.get(dataset, dataset),
-        "displayId": scene.get("displayId", ""),
-        "acquisitionDate": scene.get("temporalCoverage", {}).get("startDate", "") if isinstance(scene.get("temporalCoverage"), dict) else scene.get("acquisitionDate", ""),
-        "thumbnail": scene.get("browse", [{}])[0].get("thumbnailPath", "") if scene.get("browse") else "",
-        "color": DATASET_COLORS.get(dataset, "#ffffff"),
-        "earthExplorerUrl": f"https://earthexplorer.usgs.gov/scene/metadata/full/{dataset}/{scene.get('entityId', '')}/",
+
+    entity_id = scene.get("entityId", db_entry.get("entity_id", ""))
+
+    acq = ""
+    tc = scene.get("temporalCoverage")
+    if isinstance(tc, dict):
+        acq = tc.get("startDate", "")
+    if not acq:
+        acq = scene.get("acquisitionDate", "") or db_entry.get("acquisition_date", "")
+
+    thumbnail = ""
+    browse = scene.get("browse")
+    if browse and isinstance(browse, list):
+        thumbnail = browse[0].get("thumbnailPath", "")
+
+    return {
+        "type": "Feature",
+        "geometry": geom,
+        "properties": {
+            "entityId":        entity_id,
+            "dataset":         dataset,
+            "datasetLabel":    DATASET_LABELS.get(dataset, dataset),
+            "displayId":       scene.get("displayId", ""),
+            "acquisitionDate": acq,
+            "thumbnail":       thumbnail,
+            "color":           DATASET_COLORS.get(dataset, "#ffffff"),
+            "earthExplorerUrl": (
+                f"https://earthexplorer.usgs.gov/scene/metadata/full/"
+                f"{dataset}/{entity_id}/"
+            ),
+        },
     }
-    
-    return {"type": "Feature", "geometry": geometry, "properties": props}
 
 
-def build_geojson(features_by_dataset):
-    features = []
-    for dataset, scenes in features_by_dataset.items():
+def fetch_footprints(api_key, dataset, db_scenes):
+    """Fetch footprints for all scenes in a dataset, in batches of 250."""
+    entity_ids = [s["entity_id"] for s in db_scenes]
+    db_lookup  = {s["entity_id"]: s for s in db_scenes}
+
+    features   = []
+    batch_size = 250
+
+    for i in range(0, len(entity_ids), batch_size):
+        batch = entity_ids[i:i + batch_size]
+        print(f"    Fetching {i + 1}–{min(i + batch_size, len(entity_ids))} of {len(entity_ids)}...")
+
+        scenes = fetch_scene_metadata_batch(api_key, dataset, batch)
         for scene in scenes:
-            f = scene_to_feature(scene, dataset)
+            eid = scene.get("entityId", "")
+            f = scene_to_feature(scene, dataset, db_lookup.get(eid, {}))
             if f:
                 features.append(f)
-    
-    return {
-        "type": "FeatureCollection",
-        "features": features,
-        "metadata": {
-            "generated": datetime.utcnow().isoformat() + "Z",
-            "total": len(features),
-            "counts": {ds: sum(1 for f in features if f["properties"]["dataset"] == ds) for ds in features_by_dataset},
-        }
-    }
 
+        time.sleep(0.3)
+
+    print(f"    Footprints retrieved: {len(features)} of {len(entity_ids)}")
+    return features
+
+
+# ---------------------------------------------------------------------------
+# HTML builder
+# ---------------------------------------------------------------------------
 
 def build_html(geojson):
-    """Generate a self-contained HTML file with the map and data baked in."""
-    geojson_str = json.dumps(geojson)
-    generated = geojson["metadata"]["generated"]
-    total = geojson["metadata"]["total"]
-    counts = geojson["metadata"]["counts"]
-    
-    counts_html = " &nbsp;|&nbsp; ".join(
-        f'<span class="legend-dot" style="background:{DATASET_COLORS[ds]}"></span>'
-        f'{DATASET_LABELS[ds].split("(")[0].strip()}: <strong>{counts.get(ds, 0):,}</strong>'
-        for ds in DATASET_LABELS
-    )
-    
-    # Generate filter buttons dynamically from discovered datasets
-    filter_buttons = "\n    ".join(
-        f'<button class="filter-btn active" data-ds="{ds}" style="--btn-color:{DATASET_COLORS[ds]}">'
-        f'{DATASET_LABELS[ds].split("(")[0].strip()}</button>'
-        for ds in DATASET_LABELS
-    )
-    
-    # Colors dict for JS
+    geojson_str    = json.dumps(geojson)
+    generated      = geojson["metadata"]["generated"]
+    total          = geojson["metadata"]["total"]
+    counts         = geojson["metadata"]["counts"]
     ds_colors_json = json.dumps(DATASET_COLORS)
-    
-    html = f"""<!DOCTYPE html>
+
+    counts_html = " &nbsp;|&nbsp; ".join(
+        f'<span class="dot" style="background:{DATASET_COLORS.get(ds,"#fff")}"></span>'
+        f'{DATASET_LABELS.get(ds,ds).split("—")[0].strip()}: '
+        f'<strong>{counts.get(ds,0):,}</strong>'
+        for ds in DATASET_LABELS if ds in counts
+    )
+
+    filter_buttons = "\n    ".join(
+        f'<button class="filter-btn active" data-ds="{ds}" '
+        f'style="--c:{DATASET_COLORS.get(ds,"#fff")}">'
+        f'{DATASET_LABELS.get(ds,ds).split("—")[0].strip()}</button>'
+        for ds in DATASET_LABELS if ds in counts
+    )
+
+    return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -223,310 +267,143 @@ def build_html(geojson):
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
-  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-  body {{ background: #0d0d0d; color: #e0e0e0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; height: 100vh; display: flex; flex-direction: column; }}
-  
-  #header {{
-    background: #111;
-    border-bottom: 1px solid #222;
-    padding: 12px 20px;
-    display: flex;
-    align-items: center;
-    gap: 20px;
-    flex-wrap: wrap;
-    z-index: 1000;
-  }}
-  
-  #header h1 {{
-    font-size: 15px;
-    font-weight: 600;
-    color: #fff;
-    white-space: nowrap;
-  }}
-  
-  #header h1 span {{
-    color: #888;
-    font-weight: 400;
-    margin-left: 8px;
-    font-size: 12px;
-  }}
-  
-  #stats {{
-    font-size: 12px;
-    color: #888;
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    flex-wrap: wrap;
-  }}
-  
-  .legend-dot {{
-    display: inline-block;
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    margin-right: 4px;
-  }}
-  
-  #controls {{
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-left: auto;
-    flex-wrap: wrap;
-  }}
-  
-  .filter-btn {{
-    background: #1a1a1a;
-    border: 1px solid #333;
-    color: #ccc;
-    padding: 5px 12px;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 12px;
-    transition: all 0.15s;
-  }}
-  
-  .filter-btn {{ color: var(--btn-color, #ccc); }}
-  .filter-btn:hover {{ background: #222; border-color: #555; }}
-  .filter-btn.inactive {{ opacity: 0.4; }}
-  
-  #search-box {{
-    background: #1a1a1a;
-    border: 1px solid #333;
-    color: #ccc;
-    padding: 5px 10px;
-    border-radius: 4px;
-    font-size: 12px;
-    width: 160px;
-    outline: none;
-  }}
-  
-  #search-box:focus {{ border-color: #555; }}
-  
-  #map {{ flex: 1; }}
-  
-  #scene-count {{
-    position: absolute;
-    bottom: 16px;
-    left: 50%;
-    transform: translateX(-50%);
-    background: rgba(0,0,0,0.75);
-    backdrop-filter: blur(4px);
-    border: 1px solid #333;
-    color: #aaa;
-    padding: 6px 14px;
-    border-radius: 20px;
-    font-size: 12px;
-    z-index: 1000;
-    pointer-events: none;
-  }}
-  
-  /* Leaflet popup customisation */
-  .leaflet-popup-content-wrapper {{
-    background: #1a1a1a !important;
-    border: 1px solid #333 !important;
-    border-radius: 8px !important;
-    box-shadow: 0 8px 24px rgba(0,0,0,0.6) !important;
-    color: #e0e0e0 !important;
-  }}
-  
-  .leaflet-popup-tip {{ background: #1a1a1a !important; }}
-  
-  .popup-inner img {{
-    width: 100%;
-    border-radius: 4px;
-    margin-bottom: 8px;
-    display: block;
-  }}
-  
-  .popup-inner h3 {{
-    font-size: 13px;
-    font-weight: 600;
-    color: #fff;
-    margin-bottom: 4px;
-    font-family: monospace;
-  }}
-  
-  .popup-inner .meta {{
-    font-size: 11px;
-    color: #888;
-    margin-bottom: 8px;
-    line-height: 1.6;
-  }}
-  
-  .popup-inner a {{
-    display: inline-block;
-    font-size: 11px;
-    color: #00aaff;
-    text-decoration: none;
-    padding: 4px 10px;
-    border: 1px solid #00aaff44;
-    border-radius: 4px;
-    transition: all 0.15s;
-  }}
-  
-  .popup-inner a:hover {{ background: #00aaff22; }}
-  
-  .leaflet-control-zoom a {{
-    background: #1a1a1a !important;
-    color: #ccc !important;
-    border-color: #333 !important;
-  }}
-  
-  .leaflet-control-attribution {{
-    background: rgba(0,0,0,0.6) !important;
-    color: #555 !important;
-  }}
-  
-  .leaflet-control-attribution a {{ color: #555 !important; }}
+*{{margin:0;padding:0;box-sizing:border-box}}
+body{{background:#0d0d0d;color:#e0e0e0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;height:100vh;display:flex;flex-direction:column}}
+#header{{background:#111;border-bottom:1px solid #1e1e1e;padding:10px 16px;display:flex;align-items:center;gap:16px;flex-wrap:wrap;z-index:1000}}
+#header h1{{font-size:14px;font-weight:600;color:#fff;white-space:nowrap}}
+#header h1 span{{color:#555;font-weight:400;margin-left:6px}}
+#stats{{font-size:11px;color:#666;display:flex;align-items:center;gap:4px;flex-wrap:wrap}}
+.dot{{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:3px}}
+#controls{{display:flex;align-items:center;gap:8px;margin-left:auto;flex-wrap:wrap}}
+.filter-btn{{background:#161616;border:1px solid #2a2a2a;color:var(--c,#ccc);padding:4px 11px;border-radius:4px;cursor:pointer;font-size:11px;transition:all .15s}}
+.filter-btn:hover{{background:#1e1e1e;border-color:#444}}
+.filter-btn.inactive{{opacity:.35}}
+#search{{background:#161616;border:1px solid #2a2a2a;color:#ccc;padding:4px 9px;border-radius:4px;font-size:11px;width:150px;outline:none}}
+#search:focus{{border-color:#444}}
+#map{{flex:1}}
+#counter{{position:absolute;bottom:14px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.72);backdrop-filter:blur(4px);border:1px solid #2a2a2a;color:#777;padding:5px 13px;border-radius:20px;font-size:11px;z-index:1000;pointer-events:none}}
+.leaflet-popup-content-wrapper{{background:#1a1a1a!important;border:1px solid #2e2e2e!important;border-radius:8px!important;box-shadow:0 8px 24px rgba(0,0,0,.7)!important;color:#e0e0e0!important}}
+.leaflet-popup-tip{{background:#1a1a1a!important}}
+.pu img{{width:100%;border-radius:4px;margin-bottom:7px;display:block}}
+.pu h3{{font-size:12px;font-weight:600;color:#fff;margin-bottom:3px;font-family:monospace}}
+.pu .meta{{font-size:11px;color:#777;margin-bottom:7px;line-height:1.6}}
+.pu a{{display:inline-block;font-size:11px;color:#00aaff;text-decoration:none;padding:3px 9px;border:1px solid #00aaff33;border-radius:4px;transition:all .15s}}
+.pu a:hover{{background:#00aaff18}}
+.leaflet-control-zoom a{{background:#1a1a1a!important;color:#888!important;border-color:#2a2a2a!important}}
+.leaflet-control-attribution{{background:rgba(0,0,0,.5)!important;color:#444!important}}
+.leaflet-control-attribution a{{color:#444!important}}
 </style>
 </head>
 <body>
-
 <div id="header">
   <h1>🛰 Declassified Satellite <span>Available Downloads</span></h1>
-  <div id="stats">{counts_html} &nbsp;|&nbsp; Updated: <strong>{generated[:10]}</strong></div>
+  <div id="stats">{counts_html} &nbsp;|&nbsp; Updated <strong>{generated[:10]}</strong></div>
   <div id="controls">
-    <input id="search-box" type="text" placeholder="Search entity ID…" />
-{filter_buttons}
+    <input id="search" type="text" placeholder="Search entity ID…" />
+    {filter_buttons}
   </div>
 </div>
-
 <div id="map"></div>
-<div id="scene-count">{total:,} scenes shown</div>
-
+<div id="counter">{total:,} scenes</div>
 <script>
-const GEOJSON = {geojson_str};
-
-const map = L.map('map', {{
-  center: [20, 0],
-  zoom: 2,
-  zoomControl: true,
-  preferCanvas: true
-}});
-
-L.tileLayer('https://{{s}}.basemaps.cartocdn.com/dark_all/{{z}}/{{x}}/{{y}}{{r}}.png', {{
-  attribution: '© CartoDB © OpenStreetMap',
-  subdomains: 'abcd',
-  maxZoom: 19
-}}).addTo(map);
-
-// Track layers per dataset
-const layers = {{}};
-const DS_COLORS = {ds_colors_json};
-const visible = Object.fromEntries(Object.keys(DS_COLORS).map(k => [k, true]));
-
-function styleFor(ds) {{
-  const c = DS_COLORS[ds] || '#fff';
-  return {{ color: c, weight: 1, fillOpacity: 0.12, fillColor: c }};
-}}
-
-function buildLayers(filter) {{
-  // Remove existing
-  Object.values(layers).forEach(l => {{ try {{ map.removeLayer(l); }} catch(e) {{}} }});
-  
-  let shown = 0;
-  
-  Object.keys(DS_COLORS).forEach(ds => {{
-    const features = GEOJSON.features.filter(f => {{
-      if (f.properties.dataset !== ds) return false;
-      if (filter) {{
-        const q = filter.toLowerCase();
-        return f.properties.entityId.toLowerCase().includes(q) ||
-               f.properties.displayId.toLowerCase().includes(q);
-      }}
+const GEOJSON={geojson_str};
+const DS_COLORS={ds_colors_json};
+const map=L.map('map',{{center:[20,0],zoom:2,preferCanvas:true}});
+L.tileLayer('https://{{s}}.basemaps.cartocdn.com/dark_all/{{z}}/{{x}}/{{y}}{{r}}.png',{{attribution:'© CartoDB © OpenStreetMap',subdomains:'abcd',maxZoom:19}}).addTo(map);
+const layers={{}};
+const visible=Object.fromEntries(Object.keys(DS_COLORS).map(k=>[k,true]));
+function styleFor(ds){{const c=DS_COLORS[ds]||'#fff';return{{color:c,weight:1,fillColor:c,fillOpacity:0.12}};}}
+function buildLayers(q){{
+  Object.values(layers).forEach(l=>{{try{{map.removeLayer(l)}}catch(e){{}}}});
+  let shown=0;
+  Object.keys(DS_COLORS).forEach(ds=>{{
+    const feats=GEOJSON.features.filter(f=>{{
+      if(f.properties.dataset!==ds)return false;
+      if(q){{const lq=q.toLowerCase();return f.properties.entityId.toLowerCase().includes(lq)||(f.properties.displayId||'').toLowerCase().includes(lq);}}
       return true;
     }});
-    
-    layers[ds] = L.geoJSON({{ type: 'FeatureCollection', features }}, {{
-      style: () => styleFor(ds),
-      onEachFeature: (feature, layer) => {{
-        const p = feature.properties;
-        const thumb = p.thumbnail ? `<img src="${{p.thumbnail}}" onerror="this.style.display='none'">` : '';
-        const date = p.acquisitionDate ? `<br>Date: ${{p.acquisitionDate.slice(0,10)}}` : '';
-        layer.bindPopup(`
-          <div class="popup-inner" style="min-width:220px">
-            ${{thumb}}
-            <h3>${{p.entityId}}</h3>
-            <div class="meta">${{p.datasetLabel}}${{date}}</div>
-            <a href="${{p.earthExplorerUrl}}" target="_blank">View on EarthExplorer →</a>
-          </div>
-        `);
-        layer.on('mouseover', () => layer.setStyle({{ fillOpacity: 0.45 }}));
-        layer.on('mouseout', () => layer.setStyle(styleFor(ds)));
+    layers[ds]=L.geoJSON({{type:'FeatureCollection',features:feats}},{{
+      style:()=>styleFor(ds),
+      onEachFeature:(feat,layer)=>{{
+        const p=feat.properties;
+        const thumb=p.thumbnail?`<img src="${{p.thumbnail}}" onerror="this.style.display='none'">`:'';
+        const date=p.acquisitionDate?`<br>Date: ${{p.acquisitionDate.slice(0,10)}}`:'';
+        layer.bindPopup(`<div class="pu" style="min-width:210px">${{thumb}}<h3>${{p.entityId}}</h3><div class="meta">${{p.datasetLabel}}${{date}}</div><a href="${{p.earthExplorerUrl}}" target="_blank">EarthExplorer →</a></div>`);
+        layer.on('mouseover',()=>layer.setStyle({{fillOpacity:0.45}}));
+        layer.on('mouseout',()=>layer.setStyle(styleFor(ds)));
       }}
     }});
-    
-    if (visible[ds]) {{
-      layers[ds].addTo(map);
-      shown += features.length;
-    }}
+    if(visible[ds]){{layers[ds].addTo(map);shown+=feats.length;}}
   }});
-  
-  document.getElementById('scene-count').textContent = shown.toLocaleString() + ' scenes shown';
+  document.getElementById('counter').textContent=shown.toLocaleString()+' scenes';
 }}
-
 buildLayers('');
-
-// Filter toggle buttons
-document.querySelectorAll('.filter-btn').forEach(btn => {{
-  btn.addEventListener('click', () => {{
-    const ds = btn.dataset.ds;
-    visible[ds] = !visible[ds];
-    btn.classList.toggle('inactive', !visible[ds]);
-    buildLayers(document.getElementById('search-box').value.trim());
+document.querySelectorAll('.filter-btn').forEach(btn=>{{
+  btn.addEventListener('click',()=>{{
+    const ds=btn.dataset.ds;
+    visible[ds]=!visible[ds];
+    btn.classList.toggle('inactive',!visible[ds]);
+    buildLayers(document.getElementById('search').value.trim());
   }});
 }});
-
-// Search
-let searchTimer;
-document.getElementById('search-box').addEventListener('input', e => {{
-  clearTimeout(searchTimer);
-  searchTimer = setTimeout(() => buildLayers(e.target.value.trim()), 300);
-}});
-
+let t;
+document.getElementById('search').addEventListener('input',e=>{{clearTimeout(t);t=setTimeout(()=>buildLayers(e.target.value.trim()),300);}});
 </script>
 </body>
-</html>
-"""
-    return html
+</html>"""
 
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
 def main():
     username = os.environ.get("M2M_USERNAME")
-    token = os.environ.get("M2M_TOKEN")
-    
+    token    = os.environ.get("M2M_TOKEN")
     if not username or not token:
         raise RuntimeError("M2M_USERNAME and M2M_TOKEN environment variables must be set")
-    
-    print("Logging in to USGS M2M API...")
+
+    print(f"Reading available scenes from {DB_PATH}...")
+    by_dataset = load_scenes_from_db(DB_PATH)
+    if not by_dataset:
+        raise RuntimeError("scenes.db is empty — run the monitoring workflow first")
+
+    print("\nLogging in to USGS M2M API...")
     api_key = login(username, token)
-    
+
+    all_features = []
     try:
-        features_by_dataset = {}
-        for dataset in DATASETS:
-            features_by_dataset[dataset] = fetch_dataset(api_key, dataset)
+        for dataset, db_scenes in by_dataset.items():
+            label = DATASET_LABELS.get(dataset, dataset)
+            print(f"\n  {label} ({len(db_scenes):,} scenes)...")
+            all_features.extend(fetch_footprints(api_key, dataset, db_scenes))
     finally:
         logout(api_key)
-    
-    print("\nBuilding GeoJSON...")
-    geojson = build_geojson(features_by_dataset)
-    total = geojson["metadata"]["total"]
-    print(f"  Total features: {total:,}")
-    
-    # Save GeoJSON separately (useful for debugging / other uses)
+
+    counts = {}
+    for f in all_features:
+        ds = f["properties"]["dataset"]
+        counts[ds] = counts.get(ds, 0) + 1
+
+    geojson = {
+        "type": "FeatureCollection",
+        "features": all_features,
+        "metadata": {
+            "generated": datetime.utcnow().isoformat() + "Z",
+            "total":     len(all_features),
+            "counts":    counts,
+        },
+    }
+
     with open("available_scenes.geojson", "w") as f:
         json.dump(geojson, f)
-    print("  Saved available_scenes.geojson")
-    
-    # Build and save self-contained HTML
-    html = build_html(geojson)
+    print("\nSaved available_scenes.geojson")
+
     with open("index.html", "w", encoding="utf-8") as f:
-        f.write(html)
-    print("  Saved index.html")
-    
-    print(f"\nDone. {total:,} available scenes mapped.")
+        f.write(build_html(geojson))
+    print("Saved index.html")
+
+    print(f"\nDone — {len(all_features):,} scenes mapped.")
 
 
 if __name__ == "__main__":
