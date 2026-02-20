@@ -13,18 +13,25 @@ from datetime import datetime
 
 M2M_URL = "https://m2m.cr.usgs.gov/api/api/json/stable/"
 
-# The M2M API uses non-obvious internal dataset names.
-# These were confirmed working from the USGS monitoring project.
-# "DECLASSI" in EarthExplorer = "corona2" in the M2M API.
-# We use dataset-search at runtime to confirm DECLASSII and DECLASSIII names.
-DECLASS_SEARCH_TERMS = ["corona", "declass", "gambit", "hexagon", "argon", "lanyard"]
+# M2M internal dataset names — confirmed working from the USGS monitoring project.
+# EarthExplorer display names like "DECLASSI" do NOT work in the API.
+DATASETS = [
+    "corona2",               # Declass I  — CORONA / ARGON / LANYARD (KH-1 to KH-6, 1960–1972)
+    "5e839ff7d71d4811",      # Declass II — GAMBIT / HEXAGON mapping camera (KH-7 + KH-9, 1966–1984)
+    "5e7c41f3ffaaf662",      # Declass III — HEXAGON (KH-9, 1970s–1980s)
+]
 
-# Friendly labels keyed by the internal API dataset name (filled at runtime)
-DATASET_LABELS = {}
-DATASET_COLORS = {}
+DATASET_LABELS = {
+    "corona2":          "Declass I — CORONA/ARGON/LANYARD",
+    "5e839ff7d71d4811": "Declass II — GAMBIT/HEXAGON",
+    "5e7c41f3ffaaf662": "Declass III — HEXAGON",
+}
 
-# Colour palette — assigned in the order datasets are discovered
-COLOR_PALETTE = ["#00ff88", "#00aaff", "#ff9900", "#ff4466", "#cc88ff"]
+DATASET_COLORS = {
+    "corona2":          "#00ff88",
+    "5e839ff7d71d4811": "#00aaff",
+    "5e7c41f3ffaaf662": "#ff9900",
+}
 
 
 def login(username, token):
@@ -44,43 +51,6 @@ def login(username, token):
 def logout(api_key):
     requests.post(M2M_URL + "logout", headers={"X-Auth-Token": api_key}, timeout=10)
     print("  Logged out")
-
-def discover_datasets(api_key):
-    """Find the actual M2M dataset names for the three declassified collections."""
-    found = {}
-    seen = set()
-
-    for term in DECLASS_SEARCH_TERMS:
-        resp = requests.post(
-            M2M_URL + "dataset-search",
-            json={"datasetName": term},
-            headers={"X-Auth-Token": api_key},
-            timeout=30,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        for ds in (data.get("data") or []):
-            name = ds.get("datasetName", "")
-            alias = ds.get("datasetAlias", "") or ds.get("abstractText", "")
-            if name and name not in seen:
-                seen.add(name)
-                found[name] = alias or name
-                print(f"    Found dataset: {name!r:40s} ({alias})")
-
-    # Filter to just the three declass families
-    declass_datasets = {
-        k: v for k, v in found.items()
-        if any(x in k.lower() or x in v.lower()
-               for x in ["corona", "declass", "gambit", "hexagon", "argon", "lanyard"])
-    }
-
-    print(f"\n  Identified {len(declass_datasets)} declassified datasets:")
-    for i, (name, label) in enumerate(declass_datasets.items()):
-        DATASET_LABELS[name] = label
-        DATASET_COLORS[name] = COLOR_PALETTE[i % len(COLOR_PALETTE)]
-        print(f"    {name} -> {label}")
-
-    return list(declass_datasets.keys())
 
 
 def search_scenes(api_key, dataset, starting_number=1, max_results=50000):
@@ -534,13 +504,8 @@ def main():
     api_key = login(username, token)
     
     try:
-        print("\nDiscovering declassified dataset names from M2M API...")
-        datasets = discover_datasets(api_key)
-        if not datasets:
-            raise RuntimeError("No declassified datasets found — check M2M access permissions")
-        
         features_by_dataset = {}
-        for dataset in datasets:
+        for dataset in DATASETS:
             features_by_dataset[dataset] = fetch_dataset(api_key, dataset)
     finally:
         logout(api_key)
