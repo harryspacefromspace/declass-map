@@ -73,7 +73,7 @@ def get_satellite_type(mission, dataset):
         if 9001 <= n <= 9009:    return "KH-1"
         if 9010 <= n <= 9015:    return "KH-2"
         if 9016 <= n <= 9024:    return "KH-3"
-        if 9025 <= n <= 9058:    return "KH-4"
+        if 9025 <= n <= 9062:    return "KH-4"
         if 1001 <= n <= 1052:    return "KH-4A"
         if 1101 <= n <= 1117:    return "KH-4B"
 
@@ -316,7 +316,7 @@ body{{background:#0a0a0a;color:#e0e0e0;font-family:-apple-system,BlinkMacSystemF
 #slider-track{{position:absolute;top:50%;left:0;right:0;height:2px;background:#1e1e1e;transform:translateY(-50%);border-radius:2px}}
 #slider-fill{{position:absolute;top:50%;height:2px;background:#2e2e2e;transform:translateY(-50%);border-radius:2px;transition:background .2s}}
 #slider-fill.active{{background:#484848}}
-input[type=range]{{position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;cursor:pointer;pointer-events:auto;margin:0}}
+input[type=range]{{position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;cursor:pointer;pointer-events:auto;margin:0;z-index:2}}input[type=range]::-webkit-slider-thumb{{pointer-events:auto}}input[type=range].on-top{{z-index:3}}
 .thumb{{position:absolute;top:50%;width:10px;height:10px;background:#383838;border-radius:50%;transform:translate(-50%,-50%);pointer-events:none;border:1px solid #555;transition:background .15s}}
 .thumb.active{{background:#777}}
 
@@ -683,17 +683,27 @@ function updateSlider() {{
   thumbLo.classList.toggle('active',active);
   thumbHi.classList.toggle('active',active);
 }}
+function updateZIndex() {{
+  // Give higher z-index to whichever thumb is at/near the max end
+  // so the lo thumb is always reachable on the left
+  const lo=parseInt(rangeLo.value), hi=parseInt(rangeHi.value);
+  const range=YEAR_MAX-YEAR_MIN;
+  const loFrac=(lo-YEAR_MIN)/range, hiFrac=(hi-YEAR_MIN)/range;
+  // If hi thumb is near the left side, it would cover lo — give lo priority
+  rangeLo.classList.toggle('on-top', loFrac >= hiFrac - 0.01);
+  rangeHi.classList.toggle('on-top', hiFrac > loFrac + 0.01);
+}}
 rangeLo.addEventListener('input',()=>{{
   if(parseInt(rangeLo.value)>parseInt(rangeHi.value)) rangeLo.value=rangeHi.value;
   yearLo=parseInt(rangeLo.value); yearFiltering=yearLo>YEAR_MIN||yearHi<YEAR_MAX;
-  updateSlider(); buildLayers();
+  updateSlider(); updateZIndex(); buildLayers();
 }});
 rangeHi.addEventListener('input',()=>{{
   if(parseInt(rangeHi.value)<parseInt(rangeLo.value)) rangeHi.value=rangeLo.value;
   yearHi=parseInt(rangeHi.value); yearFiltering=yearLo>YEAR_MIN||yearHi<YEAR_MAX;
-  updateSlider(); buildLayers();
+  updateSlider(); updateZIndex(); buildLayers();
 }});
-updateSlider();
+updateSlider(); updateZIndex();
 
 // ── Reset ─────────────────────────────────────────────────────────────────────
 document.getElementById('reset-btn').addEventListener('click', () => {{
