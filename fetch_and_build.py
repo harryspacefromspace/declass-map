@@ -293,8 +293,12 @@ input[type=range]{{position:absolute;top:0;left:0;width:100%;height:100%;opacity
 .thumb{{position:absolute;top:50%;width:11px;height:11px;background:#444;border-radius:50%;transform:translate(-50%,-50%);pointer-events:none;border:1px solid #666;transition:background .15s}}
 .thumb.active{{background:#888}}
 
-#reset-filters{{background:transparent;border:1px solid #222;color:#444;padding:3px 9px;border-radius:4px;cursor:pointer;font-size:10px;transition:all .15s;margin-left:auto}}
+.bm-btn{{background:transparent;border:1px solid #222;color:#444;padding:3px 9px;border-radius:4px;cursor:pointer;font-size:10px;transition:all .15s}}
+.bm-btn:hover{{border-color:#555;color:#888}}
+.bm-btn.on{{background:#1e1e1e;border-color:#555;color:#ccc}}
+#reset-filters{{background:transparent;border:1px solid #222;color:#444;padding:3px 9px;border-radius:4px;cursor:pointer;font-size:10px;transition:all .15s}}
 #reset-filters:hover{{border-color:#555;color:#888}}
+.leaflet-popup-tip-container{{display:none!important}}
 
 #map{{flex:1}}
 
@@ -309,16 +313,22 @@ input[type=range]{{position:absolute;top:0;left:0;width:100%;height:100%;opacity
 
 /* Popup */
 .leaflet-popup-content-wrapper{{background:#1a1a1a!important;border:1px solid #2e2e2e!important;border-radius:8px!important;box-shadow:0 12px 32px rgba(0,0,0,.9)!important;color:#e0e0e0!important}}
+.leaflet-popup-content{{margin:0!important;padding:0!important}}
 .leaflet-popup-tip{{background:#1a1a1a!important}}
-.pu{{min-width:230px}}
-.pu img{{width:100%;border-radius:4px;margin-bottom:8px;display:block;cursor:pointer}}
+.pu{{min-width:250px;max-width:270px;padding:12px}}
+.pu img{{width:100%;max-height:200px;object-fit:contain;object-position:center;border-radius:4px;margin-bottom:9px;display:block;cursor:pointer;background:#111}}
 .pu h3{{font-size:12px;font-weight:600;color:#fff;margin-bottom:5px;font-family:monospace;letter-spacing:.02em}}
 .pu-tags{{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:7px}}
 .pu-tag{{font-size:10px;padding:2px 7px;border-radius:3px;border:1px solid #333;color:#999;background:#1e1e1e}}
-.pu-tag.sat{{color:#aaa;border-color:#3a3a3a}}
-.pu-tag.ds{{border-color:#3a3a3a}}
-.pu .meta{{font-size:11px;color:#666;margin-bottom:8px;line-height:1.7}}
-.pu a{{display:inline-block;font-size:11px;color:#00aaff;text-decoration:none;padding:3px 10px;border:1px solid #00aaff22;border-radius:4px;transition:all .15s}}
+.pu-tag.sat{{color:#bbb;border-color:#3a3a3a}}
+.pu .meta{{font-size:11px;color:#666;margin-bottom:9px;line-height:1.7}}
+.pu-footer{{display:flex;align-items:center;justify-content:space-between;gap:8px}}
+.pu-nav{{display:flex;align-items:center;gap:6px}}
+.pu-nav button{{background:#1e1e1e;border:1px solid #333;color:#888;padding:3px 9px;border-radius:4px;cursor:pointer;font-size:11px;transition:all .15s}}
+.pu-nav button:hover{{background:#2a2a2a;color:#bbb;border-color:#555}}
+.pu-nav button:disabled{{opacity:.25;cursor:default}}
+.pu-nav .pu-count{{font-size:10px;color:#555;white-space:nowrap}}
+.pu a{{font-size:11px;color:#00aaff;text-decoration:none;padding:3px 10px;border:1px solid #00aaff22;border-radius:4px;transition:all .15s;white-space:nowrap}}
 .pu a:hover{{background:#00aaff15;border-color:#00aaff55}}
 .leaflet-control-zoom a{{background:#161616!important;color:#666!important;border-color:#222!important}}
 .leaflet-control-attribution{{background:rgba(0,0,0,.4)!important;color:#333!important;font-size:9px!important}}
@@ -358,6 +368,13 @@ input[type=range]{{position:absolute;top:0;left:0;width:100%;height:100%;opacity
     <span class="yr-val" id="yr-hi">{year_max}</span>
   </div>
 
+  <div class="filter-group" style="margin-left:auto">
+    <span class="filter-label">Basemap</span>
+    <button class="bm-btn on" data-bm="dark">Dark</button>
+    <button class="bm-btn" data-bm="satellite">Satellite</button>
+    <button class="bm-btn" data-bm="hybrid">Hybrid</button>
+    <button class="bm-btn" data-bm="osm">OSM</button>
+  </div>
   <button id="reset-filters">Reset filters</button>
 </div>
 
@@ -372,8 +389,31 @@ const YEAR_MAX  = {year_max};
 
 // ── Leaflet ──────────────────────────────────────────────────────────────────
 const map = L.map('map', {{center:[35,30], zoom:2, preferCanvas:true}});
-L.tileLayer('https://{{s}}.basemaps.cartocdn.com/dark_all/{{z}}/{{x}}/{{y}}{{r}}.png',
-  {{attribution:'© CartoDB © OpenStreetMap', subdomains:'abcd', maxZoom:19}}).addTo(map);
+
+const BASEMAPS = {{
+  dark: L.tileLayer('https://{{s}}.basemaps.cartocdn.com/dark_all/{{z}}/{{x}}/{{y}}{{r}}.png',
+    {{attribution:'© CartoDB © OpenStreetMap', subdomains:'abcd', maxZoom:19}}),
+  satellite: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}',
+    {{attribution:'© Esri © USGS', maxZoom:19}}),
+  hybrid: [
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}',
+      {{attribution:'© Esri © USGS', maxZoom:19}}),
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{{z}}/{{y}}/{{x}}',
+      {{opacity:0.7, maxZoom:19}})
+  ],
+  osm: L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png',
+    {{attribution:'© OpenStreetMap contributors', maxZoom:19}})
+}};
+let activeBmLayers = [];
+function setBasemap(key) {{
+  activeBmLayers.forEach(l => map.removeLayer(l));
+  activeBmLayers = [];
+  const bm = BASEMAPS[key];
+  if (Array.isArray(bm)) {{ bm.forEach(l => {{ l.addTo(map); l.bringToBack(); activeBmLayers.push(l); }}); }}
+  else {{ bm.addTo(map); bm.bringToBack(); activeBmLayers.push(bm); }}
+  document.querySelectorAll('.bm-btn').forEach(b => b.classList.toggle('on', b.dataset.bm===key));
+}}
+setBasemap('dark');
 
 // ── Filter state ─────────────────────────────────────────────────────────────
 // Datasets: on by default (show all). Click to toggle off.
@@ -394,14 +434,20 @@ function anySatOn() {{
 
 // ── Layer management ──────────────────────────────────────────────────────────
 const layers = {{}};
+let visibleFeats = [];  // flat list of currently-shown features for hit-testing
 
 function styleFor(ds) {{
   const c = DS_COLORS[ds] || '#fff';
   return {{color:c, weight:1, fillColor:c, fillOpacity:0.13}};
 }}
+function styleHover(ds) {{
+  const c = DS_COLORS[ds] || '#fff';
+  return {{color:c, weight:2, fillColor:c, fillOpacity:0.45}};
+}}
 
 function buildLayers() {{
   Object.values(layers).forEach(l => {{ try {{ map.removeLayer(l); }} catch(e) {{}} }});
+  visibleFeats = [];
   let shown = 0;
   const satFiltering = anySatOn();
 
@@ -411,11 +457,8 @@ function buildLayers() {{
     const feats = GEOJSON.features.filter(f => {{
       const p = f.properties;
       if (p.dataset !== ds) return false;
-      // Satellite filter — only applies when at least one sat is toggled on
       if (satFiltering && !satActive[p.satellite]) return false;
-      // Year filter — only applies when slider has been moved
       if (yearFiltering && p.year !== null && (p.year < yearLo || p.year > yearHi)) return false;
-      // Search
       if (searchQ) {{
         const q = searchQ.toLowerCase();
         if (!p.entityId.toLowerCase().includes(q) &&
@@ -427,29 +470,12 @@ function buildLayers() {{
     layers[ds] = L.geoJSON({{type:'FeatureCollection', features:feats}}, {{
       style: () => styleFor(ds),
       onEachFeature: (feat, layer) => {{
-        const p = feat.properties;
-        const dsColor = DS_COLORS[p.dataset] || '#fff';
-        const dsShort = p.datasetLabel.split('—')[0].trim();
-        const browseHtml = p.browse
-          ? `<img src="${{p.browse}}" onerror="this.src='';" title="Click to open full image" onclick="window.open('${{p.browse}}','_blank')">`
-          : '';
-        const date = p.acquisitionDate ? p.acquisitionDate.slice(0,10) : '—';
-        layer.bindPopup(`
-          <div class="pu">
-            ${{browseHtml}}
-            <h3>${{p.entityId}}</h3>
-            <div class="pu-tags">
-              <span class="pu-tag sat">🛸 ${{p.satellite}}</span>
-              <span class="pu-tag ds" style="color:${{dsColor}}99;border-color:${{dsColor}}33">${{dsShort}}</span>
-            </div>
-            <div class="meta">📅 ${{date}}</div>
-            <a href="${{p.earthExplorerUrl}}" target="_blank">EarthExplorer →</a>
-          </div>`, {{maxWidth:280}});
-        layer.on('mouseover', () => layer.setStyle({{fillOpacity:0.5}}));
-        layer.on('mouseout',  () => layer.setStyle(styleFor(ds)));
+        layer.on('mouseover', () => layer.setStyle(styleHover(feat.properties.dataset)));
+        layer.on('mouseout',  () => layer.setStyle(styleFor(feat.properties.dataset)));
       }}
     }});
     layers[ds].addTo(map);
+    visibleFeats = visibleFeats.concat(feats);
     shown += feats.length;
   }});
 
@@ -459,6 +485,103 @@ function buildLayers() {{
 }}
 
 buildLayers();
+
+// ── Multi-scene popup on map click ────────────────────────────────────────────
+function ptInPoly(latlng, geom) {{
+  const pt = [latlng.lng, latlng.lat];
+  function inRing(pt, ring) {{
+    let inside = false;
+    for (let i=0, j=ring.length-1; i<ring.length; j=i++) {{
+      const xi=ring[i][0], yi=ring[i][1], xj=ring[j][0], yj=ring[j][1];
+      if (((yi>pt[1])!==(yj>pt[1])) && (pt[0] < (xj-xi)*(pt[1]-yi)/(yj-yi)+xi))
+        inside = !inside;
+    }}
+    return inside;
+  }}
+  function testPoly(rings) {{
+    if (!inRing(pt, rings[0])) return false;
+    for (let i=1;i<rings.length;i++) if (inRing(pt,rings[i])) return false;
+    return true;
+  }}
+  if (geom.type==='Polygon') return testPoly(geom.coordinates);
+  if (geom.type==='MultiPolygon') return geom.coordinates.some(p=>testPoly(p));
+  return false;
+}}
+
+function polyArea(geom) {{
+  function ringArea(ring) {{
+    let a=0;
+    for (let i=0,j=ring.length-1;i<ring.length;j=i++)
+      a += (ring[j][0]+ring[i][0])*(ring[j][1]-ring[i][1]);
+    return Math.abs(a/2);
+  }}
+  if (geom.type==='Polygon') return ringArea(geom.coordinates[0]);
+  if (geom.type==='MultiPolygon') return geom.coordinates.reduce((s,p)=>s+ringArea(p[0]),0);
+  return 0;
+}}
+
+const popup = L.popup({{maxWidth:300, className:'multi-popup'}});
+let puFeats=[], puIdx=0;
+let highlightLayer = null;
+
+function highlightFootprint(feat) {{
+  if (highlightLayer) {{ map.removeLayer(highlightLayer); highlightLayer = null; }}
+  if (!feat) return;
+  const c = DS_COLORS[feat.properties.dataset] || '#fff';
+  highlightLayer = L.geoJSON(feat, {{
+    style: {{color:'#fff', weight:2.5, fillColor:c, fillOpacity:0, dashArray:'6 4', className:'selected-footprint'}}
+  }}).addTo(map);
+}}
+
+function renderPopup() {{
+  highlightFootprint(puFeats[puIdx]);
+  const p = puFeats[puIdx].properties;
+  const dsColor = DS_COLORS[p.dataset] || '#fff';
+  const dsShort = p.datasetLabel.split('—')[0].trim();
+  const date = p.acquisitionDate ? p.acquisitionDate.slice(0,10) : '—';
+  const browseHtml = p.browse
+    ? `<img src="${{p.browse}}" onerror="this.style.display='none'" title="View full image" onclick="window.open('${{p.browse}}','_blank')">`
+    : '';
+  const nav = puFeats.length > 1 ? `
+    <div class="pu-nav">
+      <button id="pu-prev" ${{puIdx===0?'disabled':''}}>← Prev</button>
+      <span class="pu-count">${{puIdx+1}} of ${{puFeats.length}}</span>
+      <button id="pu-next" ${{puIdx===puFeats.length-1?'disabled':''}}>Next →</button>
+    </div>` : '';
+
+  popup.setContent(`<div class="pu">
+    ${{browseHtml}}
+    <h3>${{p.entityId}}</h3>
+    <div class="pu-tags">
+      <span class="pu-tag sat">🛸 ${{p.satellite}}</span>
+      <span class="pu-tag" style="color:${{dsColor}}aa;border-color:${{dsColor}}33">${{dsShort}}</span>
+    </div>
+    <div class="meta">📅 ${{date}}</div>
+    <div class="pu-footer">
+      <a href="${{p.earthExplorerUrl}}" target="_blank">EarthExplorer →</a>
+      ${{nav}}
+    </div>
+  </div>`);
+
+  setTimeout(() => {{
+    const prev = document.getElementById('pu-prev');
+    const next = document.getElementById('pu-next');
+    if (prev) prev.addEventListener('click', ()=>{{ puIdx--; renderPopup(); }});
+    if (next) next.addEventListener('click', ()=>{{ puIdx++; renderPopup(); }});
+  }}, 0);
+}}
+
+map.on('click', e => {{
+  const hits = visibleFeats.filter(f => ptInPoly(e.latlng, f.geometry));
+  if (!hits.length) return;
+  // Smallest area first (most specific scene on top)
+  hits.sort((a,b) => polyArea(a.geometry) - polyArea(b.geometry));
+  puFeats = hits;
+  puIdx   = 0;
+  popup.setLatLng(e.latlng).addTo(map);
+  renderPopup();
+}});
+map.on('popupclose', () => {{ if (highlightLayer) {{ map.removeLayer(highlightLayer); highlightLayer = null; }} }});
 
 // ── Dataset buttons ───────────────────────────────────────────────────────────
 document.querySelectorAll('.ds-btn').forEach(btn => {{
@@ -530,6 +653,11 @@ document.getElementById('reset-filters').addEventListener('click', () => {{
   updateSlider();
   searchQ = ''; document.getElementById('search').value = '';
   buildLayers();
+}});
+
+// ── Basemap buttons ───────────────────────────────────────────────────────────
+document.querySelectorAll('.bm-btn').forEach(btn => {{
+  btn.addEventListener('click', () => setBasemap(btn.dataset.bm));
 }});
 
 // ── Search ──────────────────────────────────────────────────────────────────
