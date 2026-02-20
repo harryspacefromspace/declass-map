@@ -31,6 +31,13 @@ DATASET_COLORS = {
     "declassiii": "#ff9900",
 }
 
+# Hash IDs needed for EarthExplorer metadata URLs
+DATASET_IDS = {
+    "corona2":    "5e839febdccb64b3",
+    "declassii":  "5e839ff7d71d4811",
+    "declassiii": "5e7c41f3ffaaf662",
+}
+
 # Satellite display order
 SAT_ORDER = [
     "KH-1", "KH-2", "KH-3", "KH-4", "KH-4A", "KH-4B",
@@ -200,7 +207,7 @@ def scene_to_feature(scene, dataset):
             "color":           DATASET_COLORS.get(dataset, "#ffffff"),
             "earthExplorerUrl": (
                 f"https://earthexplorer.usgs.gov/scene/metadata/full/"
-                f"{dataset}/{entity_id}/"
+                f"{DATASET_IDS.get(dataset, dataset)}/{entity_id}/"
             ),
         },
     }
