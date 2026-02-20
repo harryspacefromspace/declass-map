@@ -21,15 +21,15 @@ M2M_URL = "https://m2m.cr.usgs.gov/api/api/json/stable/"
 DB_PATH  = "scenes.db"
 
 DATASET_LABELS = {
-    "corona2":          "Declass I — CORONA/ARGON/LANYARD",
-    "5e839ff7d71d4811": "Declass II — GAMBIT/HEXAGON",
-    "5e7c41f3ffaaf662": "Declass III — HEXAGON",
+    "corona2":   "Declass I — CORONA/ARGON/LANYARD",
+    "declassii":  "Declass II — GAMBIT/HEXAGON",
+    "declassiii": "Declass III — HEXAGON",
 }
 
 DATASET_COLORS = {
-    "corona2":          "#00ff88",
-    "5e839ff7d71d4811": "#00aaff",
-    "5e7c41f3ffaaf662": "#ff9900",
+    "corona2":   "#00ff88",
+    "declassii":  "#00aaff",
+    "declassiii": "#ff9900",
 }
 
 
