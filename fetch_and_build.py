@@ -132,6 +132,7 @@ def search_available(api_key, dataset, filter_id):
                 "datasetName":    dataset,
                 "maxResults":     batch,
                 "startingNumber": starting,
+                "metadataType": "full",
                 "sceneFilter": {
                     "metadataFilter": {
                         "filterType": "value",
@@ -169,7 +170,8 @@ def search_available(api_key, dataset, filter_id):
 # ---------------------------------------------------------------------------
 
 def scene_to_feature(scene, dataset):
-    geom = scene.get("spatialBounds") or scene.get("spatialCoverage")
+    # Prefer spatialCoverage (actual footprint polygon) over spatialBounds (bbox)
+    geom = scene.get("spatialCoverage") or scene.get("spatialFootprint") or scene.get("spatialBounds")
     if not geom or not isinstance(geom, dict) or "type" not in geom:
         return None
 
@@ -234,9 +236,9 @@ def build_html(geojson):
         for ds in DATASET_LABELS if ds in counts
     )
 
-    # Dataset buttons — start active (show all by default before any filter is applied)
+    # Dataset buttons — start OFF (same as sat buttons)
     dataset_buttons = "\n      ".join(
-        f'<button class="ds-btn on" data-ds="{ds}" style="--c:{DATASET_COLORS[ds]}">'
+        f'<button class="ds-btn" data-ds="{ds}" style="--c:{DATASET_COLORS[ds]}">'
         f'{DATASET_LABELS[ds].split("—")[0].strip()}</button>'
         for ds in DATASET_LABELS if ds in counts
     )
@@ -305,7 +307,7 @@ input[type=range]{{position:absolute;top:0;left:0;width:100%;height:100%;opacity
 .bm-btn.on{{background:#1e1e1e;border-color:#555;color:#ccc}}
 #reset-filters{{background:transparent;border:1px solid #222;color:#444;padding:3px 9px;border-radius:4px;cursor:pointer;font-size:10px;transition:all .15s}}
 #reset-filters:hover{{border-color:#555;color:#888}}
-.leaflet-popup-tip-container{{display:none!important}}
+.leaflet-popup-tip-container,.leaflet-popup-tip{{display:none!important}}
 
 #map{{flex:1}}
 
@@ -424,7 +426,7 @@ setBasemap('dark');
 
 // ── Filter state ─────────────────────────────────────────────────────────────
 // Datasets: on by default (show all). Click to toggle off.
-const dsActive = Object.fromEntries(Object.keys(DS_COLORS).map(k => [k, true]));
+const dsActive = Object.fromEntries(Object.keys(DS_COLORS).map(k => [k, false]));
 
 // Satellites: OFF by default (additive). No sat buttons on = show all.
 // When any sat is turned on, show ONLY those turned on.
@@ -527,7 +529,7 @@ function polyArea(geom) {{
   return 0;
 }}
 
-const popup = L.popup({{maxWidth:300, className:'multi-popup'}});
+const popup = L.popup({{maxWidth:300, className:'multi-popup', offset:L.point(0,0), autoPan:true}});
 let puFeats=[], puIdx=0;
 let highlightLayer = null;
 
@@ -649,8 +651,8 @@ updateSlider();
 // ── Reset ──────────────────────────────────────────────────────────────────────
 document.getElementById('reset-filters').addEventListener('click', () => {{
   // Datasets back on
-  Object.keys(dsActive).forEach(k => dsActive[k] = true);
-  document.querySelectorAll('.ds-btn').forEach(b => b.classList.add('on'));
+  Object.keys(dsActive).forEach(k => dsActive[k] = false);
+  document.querySelectorAll('.ds-btn').forEach(b => b.classList.remove('on'));
   // Sats back off
   Object.keys(satActive).forEach(k => satActive[k] = false);
   document.querySelectorAll('.sat-btn').forEach(b => b.classList.remove('on'));
