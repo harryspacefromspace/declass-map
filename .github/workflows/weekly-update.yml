@@ -24,7 +24,13 @@ jobs:
       - name: Install dependencies
         run: pip install requests
 
-      - name: Fetch available scenes and build map
+      - name: Step 1 — Run monitoring script (updates scenes.db)
+        run: python monitor.py
+        env:
+          M2M_USERNAME: ${{ secrets.M2M_USERNAME }}
+          M2M_TOKEN: ${{ secrets.M2M_TOKEN }}
+
+      - name: Step 2 — Build map from scenes.db
         run: python fetch_and_build.py
         env:
           M2M_USERNAME: ${{ secrets.M2M_USERNAME }}
@@ -34,6 +40,6 @@ jobs:
         run: |
           git config user.name  "declass-map-bot"
           git config user.email "bot@users.noreply.github.com"
-          git add index.html available_scenes.geojson
-          git diff --staged --quiet || git commit -m "Weekly update $(date -u +%Y-%m-%d): update available scenes"
+          git add scenes.db index.html available_scenes.geojson
+          git diff --staged --quiet || git commit -m "Weekly update $(date -u +%Y-%m-%d)"
           git push
