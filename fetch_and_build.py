@@ -485,9 +485,15 @@ function setBasemap(key) {{
 }}
 setBasemap('dark');
 
+// Force Leaflet to recalculate map size after flex layout settles
+window.addEventListener('load', () => map.invalidateSize());
+setTimeout(() => map.invalidateSize(), 100);
+
 // ── Filter state ──────────────────────────────────────────────────────────────
 const satActive = {{}};
-document.querySelectorAll('.sat-btn').forEach(b => satActive[b.dataset.sat] = false);
+document.querySelectorAll('.sat-btn').forEach(b => {{
+  if (b.dataset.sat) satActive[b.dataset.sat] = false;
+}});
 
 let yearLo = YEAR_MIN, yearHi = YEAR_MAX, yearFiltering = false, searchQ = '';
 
