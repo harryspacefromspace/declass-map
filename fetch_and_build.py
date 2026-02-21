@@ -288,7 +288,7 @@ body{{background:#0a0a0a;color:#e0e0e0;font-family:-apple-system,BlinkMacSystemF
 #filters{{
   background:#0a0a0a;border-bottom:1px solid #161616;
   padding:7px 16px;display:flex;align-items:center;gap:0;flex-wrap:nowrap;overflow-x:auto;
-}}#filters .filter-section:has(.slider-wrap){{touch-action:none}}
+}}
 #filters::-webkit-scrollbar{{height:0}}
 .filter-section{{display:flex;align-items:center;gap:7px;padding-right:18px;margin-right:18px;border-right:1px solid #1a1a1a;flex-shrink:0}}
 .filter-section:last-child{{border-right:none;padding-right:0;margin-right:0;margin-left:auto}}
@@ -312,17 +312,13 @@ body{{background:#0a0a0a;color:#e0e0e0;font-family:-apple-system,BlinkMacSystemF
 
 /* Year slider */
 .yr-val{{font-size:11px;color:#555;min-width:32px;text-align:center;font-variant-numeric:tabular-nums}}
-.slider-wrap{{position:relative;width:140px;height:28px;flex-shrink:0}}
+.slider-wrap{{position:relative;width:140px;height:20px;flex-shrink:0}}
 #slider-track{{position:absolute;top:50%;left:0;right:0;height:2px;background:#1e1e1e;transform:translateY(-50%);border-radius:2px}}
 #slider-fill{{position:absolute;top:50%;height:2px;background:#2e2e2e;transform:translateY(-50%);border-radius:2px;transition:background .2s}}
 #slider-fill.active{{background:#484848}}
-.slider-track-inner{{position:absolute;top:50%;left:0;right:0;height:2px;background:#1e1e1e;transform:translateY(-50%);border-radius:2px;pointer-events:none}}
-input.range-lo,input.range-hi{{position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;cursor:pointer;pointer-events:auto;margin:0;-webkit-appearance:none;appearance:none;background:transparent}}
-input.range-lo{{z-index:3}}
-input.range-hi{{z-index:4}}
-input.range-lo.raise{{z-index:5}}
-.thumb{{position:absolute;top:50%;width:12px;height:12px;background:#484848;border-radius:50%;transform:translate(-50%,-50%);pointer-events:none;border:1px solid #555;transition:background .15s;box-shadow:0 0 0 3px rgba(255,255,255,.04)}}
-.thumb.active{{background:#888}}
+input[type=range]{{position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;cursor:pointer;pointer-events:auto;margin:0;z-index:2}}input[type=range]::-webkit-slider-thumb{{pointer-events:auto}}input[type=range].on-top{{z-index:3}}
+.thumb{{position:absolute;top:50%;width:10px;height:10px;background:#383838;border-radius:50%;transform:translate(-50%,-50%);pointer-events:none;border:1px solid #555;transition:background .15s}}
+.thumb.active{{background:#777}}
 
 /* Basemap + reset */
 .bm-btn{{background:transparent;border:1px solid #1e1e1e;color:#383838;padding:3px 8px;border-radius:4px;cursor:pointer;font-size:10px;transition:all .12s;flex-shrink:0}}
@@ -420,10 +416,10 @@ input.range-lo.raise{{z-index:5}}
     <span class="filter-label">Years</span>
     <span class="yr-val" id="yr-lo">{year_min}</span>
     <div class="slider-wrap">
-      <div id="slider-track"><div class="slider-track-inner"></div></div>
+      <div id="slider-track"></div>
       <div id="slider-fill"></div>
-      <input type="range" id="range-lo" class="range-lo" min="{year_min}" max="{year_max}" value="{year_min}" step="1">
-      <input type="range" id="range-hi" class="range-hi" min="{year_min}" max="{year_max}" value="{year_max}" step="1">
+      <input type="range" id="range-lo" min="{year_min}" max="{year_max}" value="{year_min}" step="1">
+      <input type="range" id="range-hi" min="{year_min}" max="{year_max}" value="{year_max}" step="1">
       <div class="thumb" id="thumb-lo"></div>
       <div class="thumb" id="thumb-hi"></div>
     </div>
@@ -485,15 +481,9 @@ function setBasemap(key) {{
 }}
 setBasemap('dark');
 
-// Force Leaflet to recalculate map size after flex layout settles
-window.addEventListener('load', () => map.invalidateSize());
-setTimeout(() => map.invalidateSize(), 100);
-
 // ── Filter state ──────────────────────────────────────────────────────────────
 const satActive = {{}};
-document.querySelectorAll('.sat-btn').forEach(b => {{
-  if (b.dataset.sat) satActive[b.dataset.sat] = false;
-}});
+document.querySelectorAll('.sat-btn').forEach(b => satActive[b.dataset.sat] = false);
 
 let yearLo = YEAR_MIN, yearHi = YEAR_MAX, yearFiltering = false, searchQ = '';
 
@@ -641,8 +631,8 @@ function renderPopup() {{
   setTimeout(() => {{
     const prev = document.getElementById('pu-prev');
     const next = document.getElementById('pu-next');
-    if (prev) prev.addEventListener('click', e=>{{ e.stopPropagation(); puIdx--; renderPopup(); }});
-    if (next) next.addEventListener('click', e=>{{ e.stopPropagation(); puIdx++; renderPopup(); }});
+    if (prev) prev.addEventListener('click', ()=>{{ puIdx--; renderPopup(); }});
+    if (next) next.addEventListener('click', ()=>{{ puIdx++; renderPopup(); }});
   }}, 0);
 }}
 
@@ -655,10 +645,6 @@ map.on('click', e => {{
   renderPopup();
 }});
 map.on('popupclose', () => {{ if (highlightLayer) {{ map.removeLayer(highlightLayer); highlightLayer=null; }} }});
-map.on('popupopen', () => {{
-  const el = popup.getElement();
-  if (el) L.DomEvent.stopPropagation(el);
-}});
 
 // ── Satellite buttons ─────────────────────────────────────────────────────────
 document.querySelectorAll('.sat-btn').forEach(btn => {{
@@ -686,7 +672,7 @@ const thumbLo=document.getElementById('thumb-lo'), thumbHi=document.getElementBy
 const fill=document.getElementById('slider-fill');
 
 function updateSlider() {{
-  const lo = yearLo, hi = yearHi;
+  const lo=parseInt(rangeLo.value), hi=parseInt(rangeHi.value);
   const pct=v=>(v-YEAR_MIN)/(YEAR_MAX-YEAR_MIN)*100;
   fill.style.left=pct(lo)+'%'; fill.style.width=(pct(hi)-pct(lo))+'%';
   thumbLo.style.left=pct(lo)+'%'; thumbHi.style.left=pct(hi)+'%';
@@ -697,31 +683,27 @@ function updateSlider() {{
   thumbLo.classList.toggle('active',active);
   thumbHi.classList.toggle('active',active);
 }}
-const rangeLo = document.getElementById('range-lo');
-const rangeHi = document.getElementById('range-hi');
-
-function syncZIndex() {{
-  // When lo thumb reaches hi, raise lo so it can be dragged back left
-  rangeLo.classList.toggle('raise', parseInt(rangeLo.value) >= parseInt(rangeHi.value));
+function updateZIndex() {{
+  // Give higher z-index to whichever thumb is at/near the max end
+  // so the lo thumb is always reachable on the left
+  const lo=parseInt(rangeLo.value), hi=parseInt(rangeHi.value);
+  const range=YEAR_MAX-YEAR_MIN;
+  const loFrac=(lo-YEAR_MIN)/range, hiFrac=(hi-YEAR_MIN)/range;
+  // If hi thumb is near the left side, it would cover lo — give lo priority
+  rangeLo.classList.toggle('on-top', loFrac >= hiFrac - 0.01);
+  rangeHi.classList.toggle('on-top', hiFrac > loFrac + 0.01);
 }}
-
-rangeLo.addEventListener('input', () => {{
-  if (parseInt(rangeLo.value) > parseInt(rangeHi.value))
-    rangeLo.value = rangeHi.value;
-  yearLo = parseInt(rangeLo.value);
-  yearFiltering = yearLo > YEAR_MIN || yearHi < YEAR_MAX;
-  syncZIndex(); updateSlider(); buildLayers();
+rangeLo.addEventListener('input',()=>{{
+  if(parseInt(rangeLo.value)>parseInt(rangeHi.value)) rangeLo.value=rangeHi.value;
+  yearLo=parseInt(rangeLo.value); yearFiltering=yearLo>YEAR_MIN||yearHi<YEAR_MAX;
+  updateSlider(); updateZIndex(); buildLayers();
 }});
-rangeHi.addEventListener('input', () => {{
-  if (parseInt(rangeHi.value) < parseInt(rangeLo.value))
-    rangeHi.value = rangeLo.value;
-  yearHi = parseInt(rangeHi.value);
-  yearFiltering = yearLo > YEAR_MIN || yearHi < YEAR_MAX;
-  syncZIndex(); updateSlider(); buildLayers();
+rangeHi.addEventListener('input',()=>{{
+  if(parseInt(rangeHi.value)<parseInt(rangeLo.value)) rangeHi.value=rangeLo.value;
+  yearHi=parseInt(rangeHi.value); yearFiltering=yearLo>YEAR_MIN||yearHi<YEAR_MAX;
+  updateSlider(); updateZIndex(); buildLayers();
 }});
-
-syncZIndex();
-updateSlider();
+updateSlider(); updateZIndex();
 
 // ── Reset ─────────────────────────────────────────────────────────────────────
 document.getElementById('reset-btn').addEventListener('click', () => {{
