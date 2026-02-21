@@ -288,7 +288,7 @@ body{{background:#0a0a0a;color:#e0e0e0;font-family:-apple-system,BlinkMacSystemF
 #filters{{
   background:#0a0a0a;border-bottom:1px solid #161616;
   padding:7px 16px;display:flex;align-items:center;gap:0;flex-wrap:nowrap;overflow-x:auto;
-}}
+}}#filters .filter-section:has(.slider-wrap){{touch-action:none}}
 #filters::-webkit-scrollbar{{height:0}}
 .filter-section{{display:flex;align-items:center;gap:7px;padding-right:18px;margin-right:18px;border-right:1px solid #1a1a1a;flex-shrink:0}}
 .filter-section:last-child{{border-right:none;padding-right:0;margin-right:0;margin-left:auto}}
@@ -312,11 +312,17 @@ body{{background:#0a0a0a;color:#e0e0e0;font-family:-apple-system,BlinkMacSystemF
 
 /* Year slider */
 .yr-val{{font-size:11px;color:#555;min-width:32px;text-align:center;font-variant-numeric:tabular-nums}}
-.slider-wrap{{position:relative;width:140px;height:20px;flex-shrink:0}}
+.slider-wrap{{position:relative;width:140px;height:28px;flex-shrink:0}}
 #slider-track{{position:absolute;top:50%;left:0;right:0;height:2px;background:#1e1e1e;transform:translateY(-50%);border-radius:2px}}
 #slider-fill{{position:absolute;top:50%;height:2px;background:#2e2e2e;transform:translateY(-50%);border-radius:2px;transition:background .2s}}
 #slider-fill.active{{background:#484848}}
-input[type=range]{{position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;cursor:pointer;pointer-events:none;margin:0}}.thumb{{position:absolute;top:50%;width:12px;height:12px;background:#484848;border-radius:50%;transform:translate(-50%,-50%);pointer-events:none;border:1px solid #666;transition:background .15s;box-shadow:0 0 0 3px rgba(255,255,255,.04)}}.thumb.active{{background:#888}}
+.slider-track-inner{{position:absolute;top:50%;left:0;right:0;height:2px;background:#1e1e1e;transform:translateY(-50%);border-radius:2px;pointer-events:none}}
+input.range-lo,input.range-hi{{position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;cursor:pointer;pointer-events:auto;margin:0;-webkit-appearance:none;appearance:none;background:transparent}}
+input.range-lo{{z-index:3}}
+input.range-hi{{z-index:4}}
+input.range-lo.raise{{z-index:5}}
+.thumb{{position:absolute;top:50%;width:12px;height:12px;background:#484848;border-radius:50%;transform:translate(-50%,-50%);pointer-events:none;border:1px solid #555;transition:background .15s;box-shadow:0 0 0 3px rgba(255,255,255,.04)}}
+.thumb.active{{background:#888}}
 
 /* Basemap + reset */
 .bm-btn{{background:transparent;border:1px solid #1e1e1e;color:#383838;padding:3px 8px;border-radius:4px;cursor:pointer;font-size:10px;transition:all .12s;flex-shrink:0}}
@@ -414,10 +420,10 @@ input[type=range]{{position:absolute;top:0;left:0;width:100%;height:100%;opacity
     <span class="filter-label">Years</span>
     <span class="yr-val" id="yr-lo">{year_min}</span>
     <div class="slider-wrap">
-      <div id="slider-track"></div>
+      <div id="slider-track"><div class="slider-track-inner"></div></div>
       <div id="slider-fill"></div>
-      <input type="range" id="range-lo" min="{year_min}" max="{year_max}" value="{year_min}" step="1">
-      <input type="range" id="range-hi" min="{year_min}" max="{year_max}" value="{year_max}" step="1">
+      <input type="range" class="range-lo" min="{year_min}" max="{year_max}" value="{year_min}" step="1">
+      <input type="range" class="range-hi" min="{year_min}" max="{year_max}" value="{year_max}" step="1">
       <div class="thumb" id="thumb-lo"></div>
       <div class="thumb" id="thumb-hi"></div>
     </div>
@@ -674,7 +680,7 @@ const thumbLo=document.getElementById('thumb-lo'), thumbHi=document.getElementBy
 const fill=document.getElementById('slider-fill');
 
 function updateSlider() {{
-  const lo=parseInt(rangeLo.value), hi=parseInt(rangeHi.value);
+  const lo = yearLo, hi = yearHi;
   const pct=v=>(v-YEAR_MIN)/(YEAR_MAX-YEAR_MIN)*100;
   fill.style.left=pct(lo)+'%'; fill.style.width=(pct(hi)-pct(lo))+'%';
   thumbLo.style.left=pct(lo)+'%'; thumbHi.style.left=pct(hi)+'%';
@@ -685,55 +691,37 @@ function updateSlider() {{
   thumbLo.classList.toggle('active',active);
   thumbHi.classList.toggle('active',active);
 }}
-// Proximity-based drag: mousedown picks the nearest thumb, then we drive it manually
-const sliderWrap = document.querySelector('.slider-wrap');
-let dragging = null;
+const rangeLo = document.querySelector('.range-lo');
+const rangeHi = document.querySelector('.range-hi');
 
-function getPct(e) {{
-  const rect = sliderWrap.getBoundingClientRect();
-  const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-  return Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-}}
-function pctToYear(p) {{ return Math.round(YEAR_MIN + p * (YEAR_MAX - YEAR_MIN)); }}
-
-sliderWrap.addEventListener('mousedown', startDrag);
-sliderWrap.addEventListener('touchstart', startDrag, {{passive:false}});
-
-function startDrag(e) {{
-  e.preventDefault();
-  const pct  = getPct(e);
-  const val  = pctToYear(pct);
-  const dLo  = Math.abs(val - yearLo);
-  const dHi  = Math.abs(val - yearHi);
-  // If equal distance and at max, prefer lo so it can be dragged left
-  dragging = (dLo <= dHi && !(val === yearHi && yearLo === yearHi)) ? 'lo' : 'hi';
-  moveDrag(e);
+function syncZIndex() {{
+  // When lo thumb reaches hi, raise lo so it can be dragged back left
+  rangeLo.classList.toggle('raise', parseInt(rangeLo.value) >= parseInt(rangeHi.value));
 }}
 
-function moveDrag(e) {{
-  if (!dragging) return;
-  const val = pctToYear(getPct(e));
-  if (dragging === 'lo') {{
-    yearLo = Math.min(val, yearHi);
-  }} else {{
-    yearHi = Math.max(val, yearLo);
-  }}
+rangeLo.addEventListener('input', () => {{
+  if (parseInt(rangeLo.value) > parseInt(rangeHi.value))
+    rangeLo.value = rangeHi.value;
+  yearLo = parseInt(rangeLo.value);
   yearFiltering = yearLo > YEAR_MIN || yearHi < YEAR_MAX;
-  updateSlider();
-  buildLayers();
-}}
+  syncZIndex(); updateSlider(); buildLayers();
+}});
+rangeHi.addEventListener('input', () => {{
+  if (parseInt(rangeHi.value) < parseInt(rangeLo.value))
+    rangeHi.value = rangeLo.value;
+  yearHi = parseInt(rangeHi.value);
+  yearFiltering = yearLo > YEAR_MIN || yearHi < YEAR_MAX;
+  syncZIndex(); updateSlider(); buildLayers();
+}});
 
-window.addEventListener('mousemove', e => {{ if (dragging) moveDrag(e); }});
-window.addEventListener('touchmove',  e => {{ if (dragging) moveDrag(e); }}, {{passive:false}});
-window.addEventListener('mouseup',  () => {{ dragging = null; }});
-window.addEventListener('touchend', () => {{ dragging = null; }});
-
+syncZIndex();
 updateSlider();
 
 // ── Reset ─────────────────────────────────────────────────────────────────────
 document.getElementById('reset-btn').addEventListener('click', () => {{
   Object.keys(satActive).forEach(k => satActive[k]=false);
   document.querySelectorAll('.sat-btn').forEach(b => b.classList.remove('on'));
+  rangeLo.value=YEAR_MIN; rangeHi.value=YEAR_MAX;
   yearLo=YEAR_MIN; yearHi=YEAR_MAX; yearFiltering=false;
   updateSlider();
   searchQ=''; document.getElementById('search').value='';
