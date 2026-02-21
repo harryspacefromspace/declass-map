@@ -429,7 +429,7 @@ input[type=range]{{position:absolute;top:0;left:0;width:100%;height:100%;opacity
   <div class="filter-section">
     <span class="filter-label">Basemap</span>
     <button class="bm-btn on" data-bm="dark">Dark</button>
-    <button class="bm-btn" data-bm="satellite">Satellite</button>
+    <button class="bm-btn" data-bm="topo">Topo</button>
     <button class="bm-btn" data-bm="hybrid">Hybrid</button>
     <button class="bm-btn" data-bm="osm">OSM</button>
   </div>
@@ -459,13 +459,13 @@ const map = L.map('map', {{center:[35,30], zoom:2, preferCanvas:true, zoomContro
 const BASEMAPS = {{
   dark:      L.tileLayer('https://{{s}}.basemaps.cartocdn.com/dark_all/{{z}}/{{x}}/{{y}}{{r}}.png',
                {{attribution:'© CartoDB © OpenStreetMap', subdomains:'abcd', maxZoom:19}}),
-  satellite: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}',
-               {{attribution:'© Esri © USGS', maxZoom:19}}),
+  topo:      L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{{z}}/{{y}}/{{x}}',
+               {{attribution:'© Esri © OpenStreetMap', maxZoom:19}}),
   hybrid:    [
     L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}',
       {{attribution:'© Esri © USGS', maxZoom:19}}),
     L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{{z}}/{{y}}/{{x}}',
-      {{opacity:0.7, maxZoom:19}})
+      {{maxZoom:19}})
   ],
   osm:       L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png',
                {{attribution:'© OpenStreetMap contributors', maxZoom:19}})
@@ -476,7 +476,8 @@ function setBasemap(key) {{
   activeBmLayers = [];
   const bm = BASEMAPS[key];
   const arr = Array.isArray(bm) ? bm : [bm];
-  arr.forEach(l => {{ l.addTo(map); l.bringToBack(); activeBmLayers.push(l); }});
+  // Only bringToBack on the base (first) layer — labels layer must stay above it
+  arr.forEach((l, i) => {{ l.addTo(map); if (i === 0) l.bringToBack(); activeBmLayers.push(l); }});
   document.querySelectorAll('.bm-btn').forEach(b => b.classList.toggle('on', b.dataset.bm===key));
 }}
 setBasemap('dark');
