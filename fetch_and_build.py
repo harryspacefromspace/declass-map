@@ -459,8 +459,8 @@ const map = L.map('map', {{center:[35,30], zoom:2, preferCanvas:true, zoomContro
 const BASEMAPS = {{
   dark:      L.tileLayer('https://{{s}}.basemaps.cartocdn.com/dark_all/{{z}}/{{x}}/{{y}}{{r}}.png',
                {{attribution:'© CartoDB © OpenStreetMap', subdomains:'abcd', maxZoom:19}}),
-  topo:      L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{{z}}/{{y}}/{{x}}',
-               {{attribution:'© Esri © OpenStreetMap', maxZoom:19}}),
+  topo:      L.tileLayer('https://{{s}}.tile.opentopomap.org/{{z}}/{{x}}/{{y}}.png',
+               {{attribution:'© OpenTopoMap (CC-BY-SA) © OpenStreetMap', subdomains:'abc', maxZoom:17}}),
   hybrid:    [
     L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}',
       {{attribution:'© Esri © USGS', maxZoom:19}}),
