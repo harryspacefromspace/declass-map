@@ -316,9 +316,7 @@ body{{background:#0a0a0a;color:#e0e0e0;font-family:-apple-system,BlinkMacSystemF
 #slider-track{{position:absolute;top:50%;left:0;right:0;height:2px;background:#1e1e1e;transform:translateY(-50%);border-radius:2px}}
 #slider-fill{{position:absolute;top:50%;height:2px;background:#2e2e2e;transform:translateY(-50%);border-radius:2px;transition:background .2s}}
 #slider-fill.active{{background:#484848}}
-input[type=range]{{position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;cursor:pointer;pointer-events:auto;margin:0;z-index:2}}input[type=range]::-webkit-slider-thumb{{pointer-events:auto}}input[type=range].on-top{{z-index:3}}
-.thumb{{position:absolute;top:50%;width:10px;height:10px;background:#383838;border-radius:50%;transform:translate(-50%,-50%);pointer-events:none;border:1px solid #555;transition:background .15s}}
-.thumb.active{{background:#777}}
+input[type=range]{{position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;cursor:pointer;pointer-events:none;margin:0}}.thumb{{position:absolute;top:50%;width:12px;height:12px;background:#484848;border-radius:50%;transform:translate(-50%,-50%);pointer-events:none;border:1px solid #666;transition:background .15s;box-shadow:0 0 0 3px rgba(255,255,255,.04)}}.thumb.active{{background:#888}}
 
 /* Basemap + reset */
 .bm-btn{{background:transparent;border:1px solid #1e1e1e;color:#383838;padding:3px 8px;border-radius:4px;cursor:pointer;font-size:10px;transition:all .12s;flex-shrink:0}}
@@ -631,8 +629,8 @@ function renderPopup() {{
   setTimeout(() => {{
     const prev = document.getElementById('pu-prev');
     const next = document.getElementById('pu-next');
-    if (prev) prev.addEventListener('click', ()=>{{ puIdx--; renderPopup(); }});
-    if (next) next.addEventListener('click', ()=>{{ puIdx++; renderPopup(); }});
+    if (prev) prev.addEventListener('click', e=>{{ e.stopPropagation(); puIdx--; renderPopup(); }});
+    if (next) next.addEventListener('click', e=>{{ e.stopPropagation(); puIdx++; renderPopup(); }});
   }}, 0);
 }}
 
@@ -645,6 +643,10 @@ map.on('click', e => {{
   renderPopup();
 }});
 map.on('popupclose', () => {{ if (highlightLayer) {{ map.removeLayer(highlightLayer); highlightLayer=null; }} }});
+map.on('popupopen', () => {{
+  const el = popup.getElement();
+  if (el) L.DomEvent.stopPropagation(el);
+}});
 
 // ── Satellite buttons ─────────────────────────────────────────────────────────
 document.querySelectorAll('.sat-btn').forEach(btn => {{
@@ -683,33 +685,55 @@ function updateSlider() {{
   thumbLo.classList.toggle('active',active);
   thumbHi.classList.toggle('active',active);
 }}
-function updateZIndex() {{
-  // Give higher z-index to whichever thumb is at/near the max end
-  // so the lo thumb is always reachable on the left
-  const lo=parseInt(rangeLo.value), hi=parseInt(rangeHi.value);
-  const range=YEAR_MAX-YEAR_MIN;
-  const loFrac=(lo-YEAR_MIN)/range, hiFrac=(hi-YEAR_MIN)/range;
-  // If hi thumb is near the left side, it would cover lo — give lo priority
-  rangeLo.classList.toggle('on-top', loFrac >= hiFrac - 0.01);
-  rangeHi.classList.toggle('on-top', hiFrac > loFrac + 0.01);
+// Proximity-based drag: mousedown picks the nearest thumb, then we drive it manually
+const sliderWrap = document.querySelector('.slider-wrap');
+let dragging = null;
+
+function getPct(e) {{
+  const rect = sliderWrap.getBoundingClientRect();
+  const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+  return Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
 }}
-rangeLo.addEventListener('input',()=>{{
-  if(parseInt(rangeLo.value)>parseInt(rangeHi.value)) rangeLo.value=rangeHi.value;
-  yearLo=parseInt(rangeLo.value); yearFiltering=yearLo>YEAR_MIN||yearHi<YEAR_MAX;
-  updateSlider(); updateZIndex(); buildLayers();
-}});
-rangeHi.addEventListener('input',()=>{{
-  if(parseInt(rangeHi.value)<parseInt(rangeLo.value)) rangeHi.value=rangeLo.value;
-  yearHi=parseInt(rangeHi.value); yearFiltering=yearLo>YEAR_MIN||yearHi<YEAR_MAX;
-  updateSlider(); updateZIndex(); buildLayers();
-}});
-updateSlider(); updateZIndex();
+function pctToYear(p) {{ return Math.round(YEAR_MIN + p * (YEAR_MAX - YEAR_MIN)); }}
+
+sliderWrap.addEventListener('mousedown', startDrag);
+sliderWrap.addEventListener('touchstart', startDrag, {{passive:false}});
+
+function startDrag(e) {{
+  e.preventDefault();
+  const pct  = getPct(e);
+  const val  = pctToYear(pct);
+  const dLo  = Math.abs(val - yearLo);
+  const dHi  = Math.abs(val - yearHi);
+  // If equal distance and at max, prefer lo so it can be dragged left
+  dragging = (dLo <= dHi && !(val === yearHi && yearLo === yearHi)) ? 'lo' : 'hi';
+  moveDrag(e);
+}}
+
+function moveDrag(e) {{
+  if (!dragging) return;
+  const val = pctToYear(getPct(e));
+  if (dragging === 'lo') {{
+    yearLo = Math.min(val, yearHi);
+  }} else {{
+    yearHi = Math.max(val, yearLo);
+  }}
+  yearFiltering = yearLo > YEAR_MIN || yearHi < YEAR_MAX;
+  updateSlider();
+  buildLayers();
+}}
+
+window.addEventListener('mousemove', e => {{ if (dragging) moveDrag(e); }});
+window.addEventListener('touchmove',  e => {{ if (dragging) moveDrag(e); }}, {{passive:false}});
+window.addEventListener('mouseup',  () => {{ dragging = null; }});
+window.addEventListener('touchend', () => {{ dragging = null; }});
+
+updateSlider();
 
 // ── Reset ─────────────────────────────────────────────────────────────────────
 document.getElementById('reset-btn').addEventListener('click', () => {{
   Object.keys(satActive).forEach(k => satActive[k]=false);
   document.querySelectorAll('.sat-btn').forEach(b => b.classList.remove('on'));
-  rangeLo.value=YEAR_MIN; rangeHi.value=YEAR_MAX;
   yearLo=YEAR_MIN; yearHi=YEAR_MAX; yearFiltering=false;
   updateSlider();
   searchQ=''; document.getElementById('search').value='';
