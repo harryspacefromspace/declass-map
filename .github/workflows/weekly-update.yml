@@ -2,7 +2,7 @@ name: Update Declassified Map
 
 on:
   schedule:
-    - cron: "0 5 * * 1"   # Every Monday at 5am UTC
+    - cron: "0 5 * * *"   # Every day at 5am UTC
   workflow_dispatch:        # Manual trigger from GitHub Actions tab
 
 jobs:
@@ -55,5 +55,5 @@ jobs:
           git config user.name  "declass-map-bot"
           git config user.email "bot@users.noreply.github.com"
           git add scenes.db index.html available_scenes.geojson
-          git diff --staged --quiet || git commit -m "Weekly update $(date -u +%Y-%m-%d)"
+          git diff --staged --quiet || git commit -m "Daily update $(date -u +%Y-%m-%d)"
           git push
