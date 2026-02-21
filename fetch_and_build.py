@@ -422,8 +422,8 @@ input.range-lo.raise{{z-index:5}}
     <div class="slider-wrap">
       <div id="slider-track"><div class="slider-track-inner"></div></div>
       <div id="slider-fill"></div>
-      <input type="range" class="range-lo" min="{year_min}" max="{year_max}" value="{year_min}" step="1">
-      <input type="range" class="range-hi" min="{year_min}" max="{year_max}" value="{year_max}" step="1">
+      <input type="range" id="range-lo" class="range-lo" min="{year_min}" max="{year_max}" value="{year_min}" step="1">
+      <input type="range" id="range-hi" class="range-hi" min="{year_min}" max="{year_max}" value="{year_max}" step="1">
       <div class="thumb" id="thumb-lo"></div>
       <div class="thumb" id="thumb-hi"></div>
     </div>
@@ -691,8 +691,8 @@ function updateSlider() {{
   thumbLo.classList.toggle('active',active);
   thumbHi.classList.toggle('active',active);
 }}
-const rangeLo = document.querySelector('.range-lo');
-const rangeHi = document.querySelector('.range-hi');
+const rangeLo = document.getElementById('range-lo');
+const rangeHi = document.getElementById('range-hi');
 
 function syncZIndex() {{
   // When lo thumb reaches hi, raise lo so it can be dragged back left
