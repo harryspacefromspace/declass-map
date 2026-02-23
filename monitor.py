@@ -470,24 +470,48 @@ class USGSClient:
         self.token = token
         self.api_key: Optional[str] = None
     
-    def _request(self, endpoint: str, data: dict = None) -> dict:
-        """Make API request."""
+    def _request(self, endpoint: str, data: dict = None, _retries: int = 5) -> dict:
+        """Make API request with exponential backoff retry on transient errors."""
+        import time as _time
+
         headers = {}
         if self.api_key:
             headers["X-Auth-Token"] = self.api_key
-        
-        response = requests.post(
-            f"{API_URL}{endpoint}",
-            json=data or {},
-            headers=headers
-        )
-        response.raise_for_status()
-        
-        result = response.json()
-        if result.get("errorCode"):
-            raise Exception(f"API Error: {result.get('errorMessage')}")
-        
-        return result.get("data")
+
+        last_exc = None
+        for attempt in range(_retries):
+            try:
+                response = requests.post(
+                    f"{API_URL}{endpoint}",
+                    json=data or {},
+                    headers=headers,
+                    timeout=180,
+                )
+                response.raise_for_status()
+
+                result = response.json()
+                if result.get("errorCode"):
+                    raise Exception(f"API Error: {result.get('errorMessage')}")
+
+                return result.get("data")
+
+            except (
+                requests.exceptions.ChunkedEncodingError,
+                requests.exceptions.ConnectionError,
+                requests.exceptions.Timeout,
+                requests.exceptions.ReadTimeout,
+            ) as exc:
+                last_exc = exc
+                if attempt < _retries - 1:
+                    wait = 2 ** attempt  # 1, 2, 4, 8, 16 seconds
+                    logger.warning(
+                        f"Transient error on {endpoint} (attempt {attempt + 1}/{_retries}), "
+                        f"retrying in {wait}s: {exc}"
+                    )
+                    _time.sleep(wait)
+                else:
+                    logger.error(f"All {_retries} attempts failed for {endpoint}")
+                    raise last_exc
     
     def login(self):
         """Authenticate using application token and get API key."""
