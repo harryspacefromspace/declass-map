@@ -632,8 +632,12 @@ function renderPopup() {{
   setTimeout(() => {{
     const prev = document.getElementById('pu-prev');
     const next = document.getElementById('pu-next');
-    if (prev) prev.addEventListener('click', ()=>{{ puIdx--; renderPopup(); }});
-    if (next) next.addEventListener('click', ()=>{{ puIdx++; renderPopup(); }});
+    if (prev) prev.addEventListener('click', e => {{ e.stopPropagation(); puIdx--; renderPopup(); }});
+    if (next) next.addEventListener('click', e => {{ e.stopPropagation(); puIdx++; renderPopup(); }});
+
+    // Stop all clicks inside the popup reaching the map
+    const el = popup.getElement();
+    if (el) L.DomEvent.stopPropagation(el);
   }}, 0);
 }}
 
@@ -646,6 +650,8 @@ map.on('click', e => {{
   renderPopup();
 }});
 map.on('popupclose', () => {{ if (highlightLayer) {{ map.removeLayer(highlightLayer); highlightLayer=null; }} }});
+// Belt-and-braces: block map clicks from popup container on every open
+map.on('popupopen', () => {{ const el = popup.getElement(); if (el) L.DomEvent.stopPropagation(el); }});
 
 // ── Satellite buttons ─────────────────────────────────────────────────────────
 document.querySelectorAll('.sat-btn').forEach(btn => {{
