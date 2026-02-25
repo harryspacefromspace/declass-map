@@ -458,6 +458,31 @@ input[type=range]{{position:absolute;top:0;left:0;width:100%;height:100%;opacity
 }}
 #counter.has-scenes{{color:#666;border-color:#282828}}
 
+/* ── USGS status widget ── */
+#usgs-status{{
+  position:absolute;bottom:16px;right:12px;z-index:1000;
+  background:rgba(10,10,10,.85);backdrop-filter:blur(8px);
+  border:1px solid #1e1e1e;color:#3a3a3a;
+  padding:5px 10px 5px 8px;border-radius:20px;
+  font-size:10.5px;display:flex;align-items:center;gap:6px;
+  cursor:default;transition:border-color .3s,color .3s;
+  white-space:nowrap;
+}}
+#usgs-status.up{{color:#555;border-color:#1e3322}}
+#usgs-status.down{{color:#774444;border-color:#441a1a}}
+#usgs-status.checking{{color:#444;border-color:#1e1e1e}}
+#status-dot{{
+  width:7px;height:7px;border-radius:50%;
+  background:#333;flex-shrink:0;
+  transition:background .4s,box-shadow .4s;
+}}
+#usgs-status.up    #status-dot{{background:#22cc66;box-shadow:0 0 6px #22cc6699}}
+#usgs-status.down  #status-dot{{background:#cc3333;box-shadow:0 0 6px #cc333399}}
+#usgs-status.checking #status-dot{{background:#555;box-shadow:none;animation:pulse-check .8s ease-in-out infinite}}
+@keyframes pulse-check{{0%,100%{{opacity:.3}}50%{{opacity:1}}}}
+@keyframes pulse-up{{0%,100%{{box-shadow:0 0 4px #22cc6666}}50%{{box-shadow:0 0 10px #22cc66cc}}}}
+#usgs-status.up #status-dot{{animation:pulse-up 2.5s ease-in-out infinite}}
+
 /* Popup */
 .leaflet-popup-tip-container,.leaflet-popup-tip{{display:none!important}}
 .leaflet-popup-content-wrapper{{
@@ -606,6 +631,10 @@ input[type=range]{{position:absolute;top:0;left:0;width:100%;height:100%;opacity
   </div>
 </div>
 <div id="counter">0 of {total:,} scenes</div>
+<div id="usgs-status" class="checking" title="USGS EarthExplorer API status — checks every 60s">
+  <span id="status-dot"></span>
+  <span id="status-label">USGS …</span>
+</div>
 
 <script>
 const GEOJSON   = {geojson_str};
@@ -1176,6 +1205,53 @@ ovPopupStyle.textContent = `.ov-popup .leaflet-popup-content-wrapper {{
 .ov-popup .leaflet-popup-tip-container{{display:none!important}}
 .ov-popup .leaflet-popup-close-button{{color:#555!important;top:2px!important;right:4px!important}}`;
 document.head.appendChild(ovPopupStyle);
+
+// ── USGS status check ─────────────────────────────────────────────────────────
+// We fetch the M2M API root page — it returns a small HTML page when up,
+// and times out / errors during maintenance. No auth needed.
+const STATUS_URL  = 'https://m2m.cr.usgs.gov/api/api/json/stable/';
+const STATUS_POLL = 60_000; // ms
+
+async function checkUsgsStatus() {{
+  const el    = document.getElementById('usgs-status');
+  const label = document.getElementById('status-label');
+  el.className = 'checking';
+  label.textContent = 'USGS …';
+
+  try {{
+    const ctrl = new AbortController();
+    const tid  = setTimeout(() => ctrl.abort(), 8000); // 8s timeout
+
+    const resp = await fetch(STATUS_URL, {{
+      method: 'GET',
+      signal: ctrl.signal,
+      // no-cors lets us check reachability; we just care about fetch not throwing
+      mode: 'no-cors',
+      cache: 'no-store',
+    }});
+    clearTimeout(tid);
+
+    // In no-cors mode a successful response has type 'opaque' — that's fine,
+    // it means the server responded. Any thrown error means unreachable.
+    el.className = 'up';
+    label.textContent = 'USGS Online';
+    el.title = `USGS EarthExplorer API — online as of ${{new Date().toLocaleTimeString()}}`;
+
+  }} catch (err) {{
+    el.className = 'down';
+    if (err.name === 'AbortError') {{
+      label.textContent = 'USGS Timeout';
+      el.title = `USGS EarthExplorer API — timed out at ${{new Date().toLocaleTimeString()}}`;
+    }} else {{
+      label.textContent = 'USGS Down';
+      el.title = `USGS EarthExplorer API — unreachable at ${{new Date().toLocaleTimeString()}}`;
+    }}
+  }}
+}}
+
+// Run immediately, then every 60s
+checkUsgsStatus();
+setInterval(checkUsgsStatus, STATUS_POLL);
 </script>
 </body>
 </html>"""
