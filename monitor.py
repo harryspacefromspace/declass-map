@@ -475,6 +475,32 @@ class Database:
             conn.commit()
         logger.info("Marked database as fully seeded")
 
+    def get_seed_cursor(self, dataset: str) -> int:
+        """Return the last successfully saved starting_number for this dataset's seed."""
+        key = f"seed_cursor_{dataset}"
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT value FROM meta WHERE key = ?", (key,)
+            ).fetchone()
+        return int(row[0]) if row else 1
+
+    def save_seed_cursor(self, dataset: str, starting_number: int):
+        """Persist the current pagination position so a crash can resume."""
+        key = f"seed_cursor_{dataset}"
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
+                (key, str(starting_number))
+            )
+            conn.commit()
+
+    def clear_seed_cursor(self, dataset: str):
+        """Remove the resume cursor once a dataset seed is complete."""
+        key = f"seed_cursor_{dataset}"
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("DELETE FROM meta WHERE key = ?", (key,))
+            conn.commit()
+
     def add_scenes(self, scenes: list, dataset: str, available: bool = True):
         """Add scenes to the database, setting their availability flag."""
         with sqlite3.connect(self.db_path) as conn:
@@ -528,24 +554,50 @@ class USGSClient:
         self.token = token
         self.api_key: Optional[str] = None
     
-    def _request(self, endpoint: str, data: dict = None) -> dict:
-        """Make API request."""
+    def _request(self, endpoint: str, data: dict = None, _retries: int = 5) -> dict:
+        """Make API request with exponential backoff on transient errors."""
         headers = {}
         if self.api_key:
             headers["X-Auth-Token"] = self.api_key
-        
-        response = requests.post(
-            f"{API_URL}{endpoint}",
-            json=data or {},
-            headers=headers
-        )
-        response.raise_for_status()
-        
-        result = response.json()
-        if result.get("errorCode"):
-            raise Exception(f"API Error: {result.get('errorMessage')}")
-        
-        return result.get("data")
+
+        last_exc = None
+        for attempt in range(_retries):
+            try:
+                response = requests.post(
+                    f"{API_URL}{endpoint}",
+                    json=data or {},
+                    headers=headers,
+                    timeout=180,
+                )
+                # Retry on 5xx gateway/server errors
+                if response.status_code in (502, 503, 504):
+                    raise requests.exceptions.HTTPError(
+                        f"{response.status_code} transient error", response=response
+                    )
+                response.raise_for_status()
+                result = response.json()
+                if result.get("errorCode"):
+                    raise Exception(f"API Error: {result.get('errorMessage')}")
+                return result.get("data")
+
+            except (
+                requests.exceptions.ChunkedEncodingError,
+                requests.exceptions.ConnectionError,
+                requests.exceptions.Timeout,
+                requests.exceptions.ReadTimeout,
+                requests.exceptions.HTTPError,
+            ) as exc:
+                last_exc = exc
+                if attempt < _retries - 1:
+                    wait = 2 ** attempt  # 1, 2, 4, 8, 16s
+                    logger.warning(
+                        f"Transient error on {endpoint} (attempt {attempt+1}/{_retries}), "
+                        f"retrying in {wait}s: {exc}"
+                    )
+                    time.sleep(wait)
+                else:
+                    logger.error(f"All {_retries} attempts failed for {endpoint}")
+                    raise last_exc
     
     def login(self):
         """Authenticate using application token and get API key."""
@@ -607,36 +659,67 @@ class USGSClient:
         logger.info(f"  Total available scenes found: {len(all_scenes)}")
         return all_scenes
 
-    def search_all_scenes(self, dataset: str, max_results: int = 1000000) -> list:
+    def search_all_scenes(self, dataset: str, db, known_ids: set, available_ids: set) -> int:
         """
-        Search for ALL scenes in a dataset regardless of availability.
-        Used once during initial seed to discover unscanned scenes.
+        Fetch ALL scenes for a dataset, writing unscanned ones to the DB in batches.
+        Resumes from the saved cursor if a previous run was interrupted.
+        Returns count of unscanned scenes added this run.
         """
-        logger.info(f"  Fetching ALL scenes for {dataset} (seed run)...")
-        all_scenes = []
-        starting_number = 1
-        batch_size = 10000
+        batch_size  = 10000
+        flush_every = 5      # flush to DB every 5 pages (50k scenes)
+        added_total = 0
+        pending     = []
+
+        starting_number = db.get_seed_cursor(dataset)
+        if starting_number > 1:
+            logger.info(f"  Resuming seed for {dataset} from position {starting_number:,}")
+        else:
+            logger.info(f"  Fetching ALL scenes for {dataset} (seed run)...")
 
         while True:
             result = self._request("scene-search", {
-                "datasetName": dataset,
-                "maxResults": batch_size,
+                "datasetName":    dataset,
+                "maxResults":     batch_size,
                 "startingNumber": starting_number,
-                "metadataType": "full",
-                "sceneFilter": {}
+                "metadataType":   "full",
+                "sceneFilter":    {}
             })
             scenes = result.get("results", [])
             if not scenes:
                 break
-            all_scenes.extend(scenes)
-            logger.info(f"    {len(all_scenes):,} total scenes retrieved...")
-            if len(all_scenes) >= max_results or len(scenes) < batch_size:
-                break
+
+            for s in scenes:
+                eid = s.get("entityId")
+                if eid and eid not in known_ids and eid not in available_ids:
+                    pending.append(s)
+
+            logger.info(
+                f"    position {starting_number:,} — "
+                f"{len(pending):,} unscanned buffered..."
+            )
             starting_number += batch_size
+
+            # Flush to DB and save cursor periodically
+            if len(pending) >= flush_every * batch_size:
+                db.add_scenes(pending, dataset, available=False)
+                added_total += len(pending)
+                pending = []
+                db.save_seed_cursor(dataset, starting_number)
+                logger.info(f"    Flushed. Total unscanned added: {added_total:,}")
+
+            if len(scenes) < batch_size:
+                break
+
             time.sleep(0.5)
 
-        logger.info(f"  Total scenes (all): {len(all_scenes)}")
-        return all_scenes
+        # Final flush
+        if pending:
+            db.add_scenes(pending, dataset, available=False)
+            added_total += len(pending)
+
+        db.clear_seed_cursor(dataset)
+        logger.info(f"  Seed complete for {dataset}: {added_total:,} unscanned scenes added")
+        return added_total
     
     def get_download_options(self, dataset: str, entity_ids: list) -> list:
         """
@@ -1043,16 +1126,8 @@ def run_monitor(config: dict):
 
             # ── Seed run only: fetch ALL scenes to capture unscanned ─────────
             if not seeded:
-                all_scenes = client.search_all_scenes(dataset)
-                unscanned = [
-                    s for s in all_scenes
-                    if s.get("entityId") not in known_ids
-                    and s.get("entityId") not in available_ids
-                ]
-                if unscanned:
-                    logger.info(f"Unscanned (not yet digitised) scenes: {len(unscanned)}")
-                    db.add_scenes(unscanned, dataset, available=False)
-                else:
+                added = client.search_all_scenes(dataset, db, known_ids, available_ids)
+                if not added:
                     logger.info("No unscanned scenes found for this dataset")
 
         if not seeded:
