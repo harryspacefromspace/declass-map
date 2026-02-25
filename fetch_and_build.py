@@ -1203,18 +1203,18 @@ def main():
                 batch = entity_ids[i:i + batch_size]
                 resp = requests.post(
                     M2M_URL + "scene-metadata-list",
-                    json={{
+                    json={
                         "datasetName":  dataset,
                         "entityIds":    batch,
                         "metadataType": "full",
-                    }},
-                    headers={{"X-Auth-Token": api_key}},
+                    },
+                    headers={"X-Auth-Token": api_key},
                     timeout=120,
                 )
                 resp.raise_for_status()
                 data = resp.json()
                 if data.get("errorCode"):
-                    print(f"    API error: {{data['errorMessage']}}")
+                    print(f"    API error: {data['errorMessage']}")
                     continue
                 scenes = data.get("data", []) or []
                 for scene in scenes:
@@ -1224,10 +1224,10 @@ def main():
                     if f:
                         all_features.append(f)
                 if i % 2500 == 0 and i > 0:
-                    print(f"    {i:,} / {{len(entity_ids):,}} processed...")
+                    print(f"    {i:,} / {len(entity_ids):,} processed...")
                 time.sleep(0.2)
 
-            print(f"  {{len(all_features) - before:,}} features with spatial bounds")
+            print(f"  {len(all_features) - before:,} features with spatial bounds")
     finally:
         logout(api_key)
 
