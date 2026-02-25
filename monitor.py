@@ -387,7 +387,9 @@ class Database:
                     publish_date TEXT,
                     first_seen_available TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     notified INTEGER DEFAULT 0,
-                    available INTEGER DEFAULT 1
+                    available INTEGER DEFAULT 1,
+                    geometry TEXT,
+                    browse_url TEXT
                 )
             """)
             conn.execute("""
@@ -396,12 +398,17 @@ class Database:
                     value TEXT
                 )
             """)
-            # Migrate existing DBs: add available column before any index that uses it
-            try:
-                conn.execute("ALTER TABLE scenes ADD COLUMN available INTEGER DEFAULT 1")
-                logger.info("Migrated DB: added 'available' column")
-            except Exception:
-                pass  # Column already exists
+            # Migrate existing DBs: add columns before any indexes that use them
+            for col_def, col_name in [
+                ("available INTEGER DEFAULT 1", "available"),
+                ("geometry TEXT",               "geometry"),
+                ("browse_url TEXT",             "browse_url"),
+            ]:
+                try:
+                    conn.execute(f"ALTER TABLE scenes ADD COLUMN {col_def}")
+                    logger.info(f"Migrated DB: added '{col_name}' column")
+                except Exception:
+                    pass  # Column already exists
             conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_dataset ON scenes(dataset)
             """)
@@ -502,13 +509,26 @@ class Database:
             conn.commit()
 
     def add_scenes(self, scenes: list, dataset: str, available: bool = True):
-        """Add scenes to the database, setting their availability flag."""
+        """Add scenes to the database, storing geometry and browse URL."""
+        def _geometry(s):
+            geom = s.get("spatialCoverage") or s.get("spatialFootprint") or s.get("spatialBounds")
+            if geom and isinstance(geom, dict) and "type" in geom:
+                return json.dumps(geom)
+            return None
+
+        def _browse(s):
+            browse = s.get("browse")
+            if browse and isinstance(browse, list):
+                return browse[0].get("browsePath") or browse[0].get("thumbnailPath")
+            return None
+
         with sqlite3.connect(self.db_path) as conn:
             conn.executemany(
                 """
                 INSERT OR IGNORE INTO scenes
-                (entity_id, dataset, display_id, acquisition_date, publish_date, available)
-                VALUES (?, ?, ?, ?, ?, ?)
+                (entity_id, dataset, display_id, acquisition_date, publish_date,
+                 available, geometry, browse_url)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
@@ -518,6 +538,8 @@ class Database:
                         extract_acquisition_date(s),
                         s.get("publishDate", "").split(" ")[0] if s.get("publishDate") else None,
                         1 if available else 0,
+                        _geometry(s),
+                        _browse(s),
                     )
                     for s in scenes
                 ]
