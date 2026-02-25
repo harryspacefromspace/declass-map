@@ -396,6 +396,12 @@ class Database:
                     value TEXT
                 )
             """)
+            # Migrate existing DBs: add available column before any index that uses it
+            try:
+                conn.execute("ALTER TABLE scenes ADD COLUMN available INTEGER DEFAULT 1")
+                logger.info("Migrated DB: added 'available' column")
+            except Exception:
+                pass  # Column already exists
             conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_dataset ON scenes(dataset)
             """)
@@ -405,12 +411,6 @@ class Database:
             conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_available ON scenes(available)
             """)
-            # Migrate existing DBs: add available column if missing
-            try:
-                conn.execute("ALTER TABLE scenes ADD COLUMN available INTEGER DEFAULT 1")
-                logger.info("Migrated DB: added 'available' column")
-            except Exception:
-                pass  # Column already exists
             conn.commit()
     
     def get_known_entity_ids(self, dataset: str) -> set:
