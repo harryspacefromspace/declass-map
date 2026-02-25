@@ -330,6 +330,65 @@ input[type=range]{{position:absolute;top:0;left:0;width:100%;height:100%;opacity
 /* Map */
 #map{{flex:1;position:relative}}
 
+/* ── Overlays button ── */
+#ov-toggle{{
+  position:absolute;top:12px;right:12px;z-index:1000;
+  background:#111;border:1px solid #222;color:#555;
+  padding:5px 12px 5px 9px;border-radius:6px;cursor:pointer;
+  font-size:11px;display:flex;align-items:center;gap:6px;
+  transition:all .15s;white-space:nowrap;
+}}
+#ov-toggle:hover{{border-color:#444;color:#aaa}}
+#ov-toggle.has-active{{border-color:#6644aa;color:#aa88ff}}
+#ov-toggle svg{{flex-shrink:0;transition:transform .2s}}
+#ov-toggle.open svg{{transform:rotate(180deg)}}
+
+/* ── Overlays panel ── */
+#ov-panel{{
+  position:absolute;top:46px;right:12px;z-index:999;
+  background:#111;border:1px solid #222;border-radius:8px;
+  width:240px;padding:0;
+  box-shadow:0 12px 32px rgba(0,0,0,.85);
+  display:none;overflow:hidden;
+}}
+#ov-panel.open{{display:block}}
+.ov-section{{border-bottom:1px solid #1a1a1a;padding:10px 12px}}
+.ov-section:last-child{{border-bottom:none}}
+.ov-section-title{{font-size:9px;color:#3a3a3a;text-transform:uppercase;
+  letter-spacing:.1em;margin-bottom:8px;font-weight:600}}
+.ov-btn{{
+  display:flex;align-items:center;gap:8px;width:100%;
+  background:transparent;border:1px solid #1e1e1e;
+  color:#3a3a3a;padding:5px 9px;border-radius:5px;
+  cursor:pointer;font-size:10.5px;margin-bottom:5px;
+  transition:all .12s;text-align:left;
+}}
+.ov-btn:last-child{{margin-bottom:0}}
+.ov-btn:hover{{border-color:#333;color:#888}}
+.ov-btn .ov-dot{{
+  width:8px;height:8px;border-radius:50%;
+  background:var(--ov-c,#666);flex-shrink:0;
+  box-shadow:0 0 0 0 var(--ov-c,#666);
+  transition:box-shadow .15s;
+}}
+.ov-btn.loading{{opacity:.5;cursor:wait}}
+.ov-btn.on{{
+  border-color:color-mix(in srgb,var(--ov-c) 45%,transparent);
+  color:color-mix(in srgb,var(--ov-c) 85%,#aaa);
+  background:color-mix(in srgb,var(--ov-c) 8%,transparent);
+}}
+.ov-btn.on .ov-dot{{
+  box-shadow:0 0 5px 1px color-mix(in srgb,var(--ov-c) 50%,transparent);
+}}
+.ov-badge{{margin-left:auto;font-size:9px;color:inherit;opacity:.6}}
+
+/* Overlay marker styles */
+.ov-icon{{
+  width:10px;height:10px;border-radius:50%;
+  border:2px solid var(--ic,#fff);
+  background:color-mix(in srgb,var(--ic,#fff) 25%,transparent);
+}}
+
 /* Empty state */
 #empty-state{{
   position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
@@ -443,6 +502,54 @@ input[type=range]{{position:absolute;top:0;left:0;width:100%;height:100%;opacity
   <div id="empty-state">
     <p>No scenes selected</p>
     <small>Choose a satellite type above to show footprints</small>
+  </div>
+
+  <button id="ov-toggle">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/>
+      <path d="M15.54 8.46a5 5 0 0 1 0 7.07M8.46 8.46a5 5 0 0 0 0 7.07"/>
+    </svg>
+    Overlays
+  </button>
+
+  <div id="ov-panel">
+    <div class="ov-section">
+      <div class="ov-section-title">✈ Air Power</div>
+      <button class="ov-btn" data-ov="airbase" style="--ov-c:#4d9fff">
+        <span class="ov-dot"></span>Military Airbases
+        <span class="ov-badge" id="ov-badge-airbase"></span>
+      </button>
+      <button class="ov-btn" data-ov="airfield" style="--ov-c:#88ccff">
+        <span class="ov-dot"></span>Airfields / Strips
+        <span class="ov-badge" id="ov-badge-airfield"></span>
+      </button>
+    </div>
+    <div class="ov-section">
+      <div class="ov-section-title">☢ Nuclear</div>
+      <button class="ov-btn" data-ov="missile_silo" style="--ov-c:#ff4444">
+        <span class="ov-dot"></span>ICBM Missile Silos
+        <span class="ov-badge" id="ov-badge-missile_silo"></span>
+      </button>
+      <button class="ov-btn" data-ov="nuclear" style="--ov-c:#ff8800">
+        <span class="ov-dot"></span>Nuclear Sites
+        <span class="ov-badge" id="ov-badge-nuclear"></span>
+      </button>
+    </div>
+    <div class="ov-section">
+      <div class="ov-section-title">🛡 Ground Forces</div>
+      <button class="ov-btn" data-ov="bunker" style="--ov-c:#aacc44">
+        <span class="ov-dot"></span>Bunkers &amp; Fortifications
+        <span class="ov-badge" id="ov-badge-bunker"></span>
+      </button>
+      <button class="ov-btn" data-ov="naval" style="--ov-c:#44ddcc">
+        <span class="ov-dot"></span>Naval Bases
+        <span class="ov-badge" id="ov-badge-naval"></span>
+      </button>
+      <button class="ov-btn" data-ov="radar" style="--ov-c:#cc88ff">
+        <span class="ov-dot"></span>Radar &amp; Early Warning
+        <span class="ov-badge" id="ov-badge-radar"></span>
+      </button>
+    </div>
   </div>
 </div>
 <div id="counter">0 of {total:,} scenes</div>
@@ -733,6 +840,238 @@ document.getElementById('search').addEventListener('input', e => {{
   clearTimeout(st);
   st=setTimeout(()=>{{ searchQ=e.target.value.trim(); buildLayers(); }},300);
 }});
+
+// ── Overlays ──────────────────────────────────────────────────────────────────
+const OVERPASS = 'https://overpass-api.de/api/interpreter';
+
+const OV_QUERIES = {{
+  airbase: `[out:json][timeout:60];
+(
+  node["military"="airfield"];
+  node["aeroway"="aerodrome"]["military"];
+  way["military"="airfield"];
+  way["aeroway"="aerodrome"]["military"];
+  relation["military"="airfield"];
+);
+out center;`,
+
+  airfield: `[out:json][timeout:60];
+(
+  node["aeroway"="aerodrome"]["military"!~"."]["military"!="airfield"];
+  node["aeroway"="airstrip"];
+  way["aeroway"="aerodrome"]["military"!~"."]["military"!="airfield"];
+  way["aeroway"="airstrip"];
+);
+out center;`,
+
+  missile_silo: `[out:json][timeout:60];
+(
+  node["military"="missile_silo"];
+  node["man_made"="missile_silo"];
+  node["military"="nuclear_explosion_site"];
+  way["military"="missile_silo"];
+  way["man_made"="missile_silo"];
+);
+out center;`,
+
+  nuclear: `[out:json][timeout:60];
+(
+  node["military"="nuclear_hazard"];
+  node["landuse"="military"]["name"~"nuclear|atom|nuke",i];
+  node["power"="plant"]["plant:source"="nuclear"];
+  way["power"="plant"]["plant:source"="nuclear"];
+  relation["power"="plant"]["plant:source"="nuclear"];
+);
+out center;`,
+
+  bunker: `[out:json][timeout:60];
+(
+  node["military"="bunker"];
+  node["building"="bunker"]["military"];
+  node["military"="obstacle"];
+  node["military"="trench"];
+  way["military"="bunker"];
+  way["building"="bunker"]["military"];
+);
+out center;`,
+
+  naval: `[out:json][timeout:60];
+(
+  node["military"="naval_base"];
+  node["landuse"="military"]["name"~"naval|navy|fleet|submarine|harbour|harbor",i];
+  way["military"="naval_base"];
+  way["landuse"="military"]["name"~"naval|navy|fleet|submarine",i];
+);
+out center;`,
+
+  radar: `[out:json][timeout:60];
+(
+  node["military"="radar"];
+  node["man_made"="radar"]["military"];
+  node["military"="early_warning"];
+  way["military"="radar"];
+  way["man_made"="radar"]["military"];
+);
+out center;`,
+}};
+
+const OV_COLORS = {{
+  airbase:      '#4d9fff',
+  airfield:     '#88ccff',
+  missile_silo: '#ff4444',
+  nuclear:      '#ff8800',
+  bunker:       '#aacc44',
+  naval:        '#44ddcc',
+  radar:        '#cc88ff',
+}};
+
+const OV_LABELS = {{
+  airbase:      'Military Airbase',
+  airfield:     'Airfield',
+  missile_silo: 'Missile Silo',
+  nuclear:      'Nuclear Site',
+  bunker:       'Bunker/Fortification',
+  naval:        'Naval Base',
+  radar:        'Radar/Early Warning',
+}};
+
+const ovLayers  = {{}};   // key → L.LayerGroup
+const ovCache   = {{}};   // key → GeoJSON features (avoid re-fetching)
+const ovActive  = {{}};   // key → bool
+
+function ovMarker(lat, lng, key, name) {{
+  const c = OV_COLORS[key] || '#fff';
+  const icon = L.divIcon({{
+    className: '',
+    html: `<div style="
+      width:10px;height:10px;border-radius:50%;
+      background:${{c}}33;
+      border:2px solid ${{c}};
+      box-shadow:0 0 6px ${{c}}66;
+    "></div>`,
+    iconSize:[10,10], iconAnchor:[5,5],
+  }});
+  const marker = L.marker([lat, lng], {{icon}});
+  const label  = OV_LABELS[key] || key;
+  const display = name ? `<strong style="color:#ddd">${{name}}</strong><br>` : '';
+  marker.bindPopup(
+    `<div style="font-size:11px;color:#999;min-width:140px">
+      ${{display}}
+      <span style="color:${{c}};font-size:10px">● ${{label}}</span>
+    </div>`,
+    {{maxWidth:220, className:'ov-popup'}}
+  );
+  return marker;
+}}
+
+async function loadOverlay(key) {{
+  const btn = document.querySelector(`.ov-btn[data-ov="${{key}}"]`);
+  if (!btn) return;
+
+  // Toggle off
+  if (ovActive[key]) {{
+    ovActive[key] = false;
+    btn.classList.remove('on');
+    if (ovLayers[key]) map.removeLayer(ovLayers[key]);
+    updateOvToggle();
+    return;
+  }}
+
+  // Use cache if available
+  if (ovCache[key]) {{
+    ovActive[key] = true;
+    btn.classList.add('on');
+    ovLayers[key].addTo(map);
+    updateOvToggle();
+    return;
+  }}
+
+  // Fetch from Overpass
+  btn.classList.add('loading');
+  btn.disabled = true;
+  try {{
+    const resp = await fetch(OVERPASS, {{
+      method: 'POST',
+      body: 'data=' + encodeURIComponent(OV_QUERIES[key]),
+    }});
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const data = await resp.json();
+
+    const group = L.layerGroup();
+    let count = 0;
+    data.elements.forEach(el => {{
+      let lat, lng;
+      if (el.type === 'node') {{ lat=el.lat; lng=el.lon; }}
+      else if (el.center)    {{ lat=el.center.lat; lng=el.center.lon; }}
+      else return;
+      const name = el.tags?.name || el.tags?.['name:en'] || '';
+      group.addLayer(ovMarker(lat, lng, key, name));
+      count++;
+    }});
+
+    ovCache[key] = true;
+    ovLayers[key] = group;
+    ovActive[key] = true;
+    group.addTo(map);
+    btn.classList.add('on');
+
+    const badge = document.getElementById('ov-badge-' + key);
+    if (badge) badge.textContent = count.toLocaleString();
+
+  }} catch(err) {{
+    console.error('Overlay fetch failed:', err);
+    btn.title = 'Failed to load — click to retry';
+  }} finally {{
+    btn.classList.remove('loading');
+    btn.disabled = false;
+  }}
+  updateOvToggle();
+}}
+
+function updateOvToggle() {{
+  const toggle = document.getElementById('ov-toggle');
+  const anyOn = Object.values(ovActive).some(Boolean);
+  toggle.classList.toggle('has-active', anyOn);
+}}
+
+// Wire up overlay buttons
+document.querySelectorAll('.ov-btn').forEach(btn => {{
+  btn.addEventListener('click', e => {{
+    e.stopPropagation();
+    loadOverlay(btn.dataset.ov);
+  }});
+}});
+
+// Toggle panel open/close
+const ovToggleBtn = document.getElementById('ov-toggle');
+const ovPanel = document.getElementById('ov-panel');
+ovToggleBtn.addEventListener('click', e => {{
+  e.stopPropagation();
+  const open = ovPanel.classList.toggle('open');
+  ovToggleBtn.classList.toggle('open', open);
+}});
+// Close panel on outside click
+document.addEventListener('click', e => {{
+  if (!ovPanel.contains(e.target) && e.target !== ovToggleBtn) {{
+    ovPanel.classList.remove('open');
+    ovToggleBtn.classList.remove('open');
+  }}
+}});
+// Stop map clicks propagating through panel
+L.DomEvent.stopPropagation(ovPanel);
+L.DomEvent.stopPropagation(ovToggleBtn);
+
+// Style overlay popups to match main theme
+const ovPopupStyle = document.createElement('style');
+ovPopupStyle.textContent = `.ov-popup .leaflet-popup-content-wrapper {{
+  background:#141414!important;border:1px solid #282828!important;
+  border-radius:8px!important;box-shadow:0 8px 24px rgba(0,0,0,.9)!important;
+  padding:8px 10px!important;
+}}
+.ov-popup .leaflet-popup-content{{margin:0!important;padding:0!important}}
+.ov-popup .leaflet-popup-tip-container{{display:none!important}}
+.ov-popup .leaflet-popup-close-button{{color:#555!important;top:2px!important;right:4px!important}}`;
+document.head.appendChild(ovPopupStyle);
 </script>
 </body>
 </html>"""
