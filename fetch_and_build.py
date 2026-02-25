@@ -94,6 +94,32 @@ def get_mission_from_scene(scene):
     return None
 
 
+def _sat_from_entity(entity_id: str, dataset: str) -> str:
+    """Derive satellite type from entity_id prefix — no API call needed.
+    Entity IDs encode the mission number in their prefix, e.g. D3C10010080A001."""
+    if not entity_id:
+        return "Unknown"
+    # Strip leading dataset prefix chars to get mission digits
+    # corona2: prefix "D1C" then 4-digit mission; declassii: "D2C"; declassiii: "D3C"
+    try:
+        if dataset == "declassiii":
+            return "KH-9 (HEXAGON)"
+        # Extract numeric mission from entity ID
+        digits = "".join(c for c in entity_id[:10] if c.isdigit())
+        if not digits:
+            return "Unknown"
+        mission_str = digits[:4].lstrip("0") or "0"
+        mission_letter = ""
+        # Check for ARGON suffix (A) in entity ID
+        for ch in entity_id[:8]:
+            if ch == "A" and not ch.isdigit():
+                mission_letter = "A"
+                break
+        return get_satellite_type(mission_str + mission_letter, dataset)
+    except Exception:
+        return "Unknown"
+
+
 # ---------------------------------------------------------------------------
 # M2M helpers
 # ---------------------------------------------------------------------------
@@ -1160,11 +1186,6 @@ document.head.appendChild(ovPopupStyle);
 # ---------------------------------------------------------------------------
 
 def main():
-    username = os.environ.get("M2M_USERNAME")
-    token    = os.environ.get("M2M_TOKEN")
-    if not username or not token:
-        raise RuntimeError("M2M_USERNAME and M2M_TOKEN must be set")
-
     db_path = "scenes.db"
     if not os.path.exists(db_path):
         raise RuntimeError(
@@ -1173,63 +1194,57 @@ def main():
 
     print(f"Reading scenes from {db_path}...")
     import sqlite3
-    all_rows = []
+    import json as _json
+    all_features = []
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
         cursor = conn.execute(
-            "SELECT entity_id, dataset, display_id, acquisition_date, available FROM scenes"
+            """SELECT entity_id, dataset, display_id, acquisition_date,
+                      available, geometry, browse_url
+               FROM scenes
+               WHERE geometry IS NOT NULL"""
         )
-        all_rows = [dict(r) for r in cursor.fetchall()]
-    print(f"  {len(all_rows):,} total scenes in DB")
+        rows = cursor.fetchall()
 
-    print("Fetching spatial bounds and browse URLs from USGS M2M API...")
-    api_key = login(username, token)
+    print(f"  {len(rows):,} scenes with geometry")
 
-    all_features = []
-    try:
-        for dataset in DATASETS:
-            rows = [r for r in all_rows if r["dataset"] == dataset]
-            if not rows:
-                continue
-            print(f"\n  {DATASET_LABELS[dataset]} — {len(rows):,} scenes...")
+    for row in rows:
+        try:
+            geom = _json.loads(row["geometry"])
+        except Exception:
+            continue
+        dataset   = row["dataset"]
+        entity_id = row["entity_id"]
+        acq       = row["acquisition_date"] or ""
+        year      = int(acq[:4]) if acq and len(acq) >= 4 and acq[:4].isdigit() else None
+        available = bool(row["available"])
+        browse    = row["browse_url"] or ""
 
-            # Fetch full metadata in batches of 250 (M2M entityIds limit)
-            entity_ids = [r["entity_id"] for r in rows]
-            avail_map  = {r["entity_id"]: bool(r["available"]) for r in rows}
-            batch_size = 250
-            before = len(all_features)
+        # Derive satellite type from entity_id prefix (same logic as get_satellite_type)
+        sat_type  = _sat_from_entity(entity_id, dataset)
 
-            for i in range(0, len(entity_ids), batch_size):
-                batch = entity_ids[i:i + batch_size]
-                resp = requests.post(
-                    M2M_URL + "scene-metadata-list",
-                    json={
-                        "datasetName":  dataset,
-                        "entityIds":    batch,
-                        "metadataType": "full",
-                    },
-                    headers={"X-Auth-Token": api_key},
-                    timeout=120,
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                if data.get("errorCode"):
-                    print(f"    API error: {data['errorMessage']}")
-                    continue
-                scenes = data.get("data", []) or []
-                for scene in scenes:
-                    eid  = scene.get("entityId", "")
-                    avail = avail_map.get(eid, True)
-                    f = scene_to_feature(scene, dataset, available=avail)
-                    if f:
-                        all_features.append(f)
-                if i % 2500 == 0 and i > 0:
-                    print(f"    {i:,} / {len(entity_ids):,} processed...")
-                time.sleep(0.2)
+        all_features.append({
+            "type": "Feature",
+            "geometry": geom,
+            "properties": {
+                "entityId":        entity_id,
+                "dataset":         dataset,
+                "datasetLabel":    DATASET_LABELS.get(dataset, dataset),
+                "displayId":       row["display_id"] or "",
+                "acquisitionDate": acq,
+                "year":            year,
+                "satellite":       sat_type,
+                "available":       available,
+                "browse":          browse,
+                "color":           DATASET_COLORS.get(dataset, "#ffffff"),
+                "earthExplorerUrl": (
+                    f"https://earthexplorer.usgs.gov/scene/metadata/full/"
+                    f"{DATASET_IDS.get(dataset, dataset)}/{entity_id}/"
+                ),
+            },
+        })
 
-            print(f"  {len(all_features) - before:,} features with spatial bounds")
-    finally:
-        logout(api_key)
+    print(f"  {len(all_features):,} features built")
 
     counts    = {}
     years     = []
