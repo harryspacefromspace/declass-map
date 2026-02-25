@@ -120,11 +120,11 @@ def logout(api_key):
     print("  Logged out")
 
 
-def search_available(api_key, dataset, filter_id):
+def _paginate(api_key, dataset, scene_filter):
+    """Paginate through M2M scene-search with a given filter dict."""
     all_scenes = []
     starting   = 1
     batch      = 10000
-
     while True:
         resp = requests.post(
             M2M_URL + "scene-search",
@@ -132,14 +132,8 @@ def search_available(api_key, dataset, filter_id):
                 "datasetName":    dataset,
                 "maxResults":     batch,
                 "startingNumber": starting,
-                "metadataType": "full",
-                "sceneFilter": {
-                    "metadataFilter": {
-                        "filterType": "value",
-                        "filterId":   filter_id,
-                        "value":      "Y",
-                    }
-                },
+                "metadataType":   "full",
+                "sceneFilter":    scene_filter,
             },
             headers={"X-Auth-Token": api_key},
             timeout=120,
@@ -149,27 +143,39 @@ def search_available(api_key, dataset, filter_id):
         if data.get("errorCode"):
             print(f"    API error: {data['errorMessage']}")
             break
-
         scenes = data.get("data", {}).get("results", [])
         if not scenes:
             break
-
         all_scenes.extend(scenes)
         print(f"    {len(all_scenes):,} scenes retrieved...")
-
         if len(scenes) < batch:
             break
         starting += batch
         time.sleep(0.5)
-
     return all_scenes
+
+
+def search_available(api_key, dataset, filter_id):
+    """Return only scenes where Download Available = Y (already scanned)."""
+    return _paginate(api_key, dataset, {
+        "metadataFilter": {
+            "filterType": "value",
+            "filterId":   filter_id,
+            "value":      "Y",
+        }
+    })
+
+
+def search_all(api_key, dataset):
+    """Return ALL scenes in the dataset (no availability filter) for unscanned."""
+    return _paginate(api_key, dataset, {})
 
 
 # ---------------------------------------------------------------------------
 # GeoJSON conversion
 # ---------------------------------------------------------------------------
 
-def scene_to_feature(scene, dataset):
+def scene_to_feature(scene, dataset, available=True):
     # Prefer spatialCoverage (actual footprint polygon) over spatialBounds (bbox)
     geom = scene.get("spatialCoverage") or scene.get("spatialFootprint") or scene.get("spatialBounds")
     if not geom or not isinstance(geom, dict) or "type" not in geom:
@@ -205,6 +211,7 @@ def scene_to_feature(scene, dataset):
             "acquisitionDate": acq,
             "year":            year,
             "satellite":       sat_type,
+            "available":       available,
             "browse":          browse_url,
             "color":           DATASET_COLORS.get(dataset, "#ffffff"),
             "earthExplorerUrl": (
@@ -326,6 +333,22 @@ input[type=range]{{position:absolute;top:0;left:0;width:100%;height:100%;opacity
 .bm-btn.on{{background:#1e1e1e;border-color:#484848;color:#bbb}}
 #reset-btn{{background:transparent;border:1px solid #1e1e1e;color:#2e2e2e;padding:3px 9px;border-radius:4px;cursor:pointer;font-size:10px;transition:all .12s;flex-shrink:0}}
 #reset-btn:hover{{border-color:#444;color:#777}}
+
+/* Unscanned toggle */
+#unscanned-btn{{
+  background:transparent;border:1px solid #1e1e1e;color:#2e2e2e;
+  padding:3px 9px;border-radius:4px;cursor:pointer;font-size:10px;
+  transition:all .12s;flex-shrink:0;display:flex;align-items:center;gap:5px;
+}}
+#unscanned-btn:hover{{border-color:#443322;color:#aa7744}}
+#unscanned-btn.on{{
+  background:#1a1208;border-color:#664422;color:#cc8844;
+}}
+#unscanned-btn .udot{{
+  width:7px;height:7px;border-radius:50%;
+  border:1.5px dashed #443322;flex-shrink:0;transition:border-color .12s;
+}}
+#unscanned-btn.on .udot{{border-color:#cc8844;}}
 
 /* Map */
 #map{{flex:1;position:relative}}
@@ -494,6 +517,10 @@ input[type=range]{{position:absolute;top:0;left:0;width:100%;height:100%;opacity
   </div>
 
   <div class="filter-section">
+    <button id="unscanned-btn"><span class="udot"></span>Show Unscanned</button>
+  </div>
+
+  <div class="filter-section">
     <button id="reset-btn">Reset</button>
   </div>
 </div>
@@ -594,6 +621,7 @@ const satActive = {{}};
 document.querySelectorAll('.sat-btn').forEach(b => satActive[b.dataset.sat] = false);
 
 let yearLo = YEAR_MIN, yearHi = YEAR_MAX, yearFiltering = false, searchQ = '';
+let showUnscanned = false;
 
 function anySatOn() {{ return Object.values(satActive).some(Boolean); }}
 
@@ -609,6 +637,14 @@ function styleHover(ds) {{
   const c = DS_COLORS[ds] || '#fff';
   return {{color:c, weight:2, fillColor:c, fillOpacity:0.42}};
 }}
+function styleUnscanned(ds) {{
+  const c = DS_COLORS[ds] || '#fff';
+  return {{color:c, weight:0.8, fillColor:c, fillOpacity:0.04, dashArray:'4 5', opacity:0.35}};
+}}
+function styleUnscannedHover(ds) {{
+  const c = DS_COLORS[ds] || '#fff';
+  return {{color:c, weight:1.5, fillColor:c, fillOpacity:0.15, dashArray:'4 5', opacity:0.7}};
+}}
 
 function buildLayers() {{
   Object.values(layers).forEach(l => {{ try {{ map.removeLayer(l); }} catch(e) {{}} }});
@@ -622,6 +658,7 @@ function buildLayers() {{
   const feats = GEOJSON.features.filter(f => {{
     const p = f.properties;
     if (!satActive[p.satellite]) return false;
+    if (!showUnscanned && !p.available) return false;
     if (yearFiltering && p.year !== null && (p.year < yearLo || p.year > yearHi)) return false;
     if (searchQ) {{
       const q = searchQ.toLowerCase();
@@ -630,20 +667,28 @@ function buildLayers() {{
     return true;
   }});
 
-  // Group by dataset for colour coding
-  const byDs = {{}};
+  // Group by dataset + availability for styling
+  const byKey = {{}};
   feats.forEach(f => {{
-    const ds = f.properties.dataset;
-    if (!byDs[ds]) byDs[ds] = [];
-    byDs[ds].push(f);
+    const key = f.properties.dataset + (f.properties.available ? '' : '__unscanned');
+    if (!byKey[key]) byKey[key] = [];
+    byKey[key].push(f);
   }});
 
-  Object.entries(byDs).forEach(([ds, dsFeats]) => {{
-    layers[ds] = L.geoJSON({{type:'FeatureCollection', features:dsFeats}}, {{
-      style: () => styleFor(ds),
+  Object.entries(byKey).forEach(([key, kFeats]) => {{
+    const isUnscanned = key.endsWith('__unscanned');
+    const ds = isUnscanned ? key.replace('__unscanned','') : key;
+    const styleFn  = isUnscanned
+      ? () => styleUnscanned(ds)
+      : () => styleFor(ds);
+    const hoverFn  = isUnscanned
+      ? () => styleUnscannedHover(ds)
+      : () => styleHover(ds);
+    layers[key] = L.geoJSON({{type:'FeatureCollection', features:kFeats}}, {{
+      style: styleFn,
       onEachFeature: (feat, layer) => {{
-        layer.on('mouseover', () => layer.setStyle(styleHover(feat.properties.dataset)));
-        layer.on('mouseout',  () => layer.setStyle(styleFor(feat.properties.dataset)));
+        layer.on('mouseover', () => layer.setStyle(hoverFn()));
+        layer.on('mouseout',  () => layer.setStyle(styleFn()));
       }}
     }}).addTo(map);
   }});
@@ -728,6 +773,7 @@ function renderPopup() {{
     <div class="pu-tags">
       <span class="pu-tag sat">${{p.satellite}}</span>
       <span class="pu-tag" style="color:${{c}}99;border-color:${{c}}28">${{dsShort}}</span>
+      ${{p.available ? '' : '<span class="pu-tag" style="color:#cc8844;border-color:#664422;border-style:dashed">⏳ Not yet scanned</span>'}}
     </div>
     <div class="meta">📅 ${{date}}</div>
     <div class="pu-footer">
@@ -827,6 +873,7 @@ document.getElementById('reset-btn').addEventListener('click', () => {{
   yearLo=YEAR_MIN; yearHi=YEAR_MAX; yearFiltering=false;
   updateSlider();
   searchQ=''; document.getElementById('search').value='';
+  showUnscanned=false; document.getElementById('unscanned-btn').classList.remove('on');
   buildLayers();
 }});
 
@@ -834,11 +881,42 @@ document.getElementById('reset-btn').addEventListener('click', () => {{
 document.querySelectorAll('.bm-btn').forEach(btn =>
   btn.addEventListener('click', () => setBasemap(btn.dataset.bm)));
 
-// ── Search ────────────────────────────────────────────────────────────────────
+// ── Search with zoom ─────────────────────────────────────────────────────────
 let st;
 document.getElementById('search').addEventListener('input', e => {{
   clearTimeout(st);
-  st=setTimeout(()=>{{ searchQ=e.target.value.trim(); buildLayers(); }},300);
+  st = setTimeout(() => {{
+    searchQ = e.target.value.trim();
+    buildLayers();
+
+    // If search matches exactly one scene, zoom to it
+    if (searchQ.length >= 4) {{
+      const q = searchQ.toLowerCase();
+      const matches = GEOJSON.features.filter(f => {{
+        const p = f.properties;
+        return p.entityId.toLowerCase() === q || (p.displayId||'').toLowerCase() === q
+            || p.entityId.toLowerCase().startsWith(q) || (p.displayId||'').toLowerCase().startsWith(q);
+      }});
+      if (matches.length === 1) {{
+        // Compute bounds of that feature's geometry
+        const tmpLayer = L.geoJSON(matches[0]);
+        const bounds = tmpLayer.getBounds();
+        if (bounds.isValid()) map.fitBounds(bounds, {{padding:[40,40], maxZoom:10}});
+      }} else if (matches.length > 1 && matches.length <= 50) {{
+        // Multiple matches — zoom to their combined extent
+        const tmpLayer = L.geoJSON({{type:'FeatureCollection', features:matches}});
+        const bounds = tmpLayer.getBounds();
+        if (bounds.isValid()) map.fitBounds(bounds, {{padding:[40,40], maxZoom:8}});
+      }}
+    }}
+  }}, 300);
+}});
+
+// ── Unscanned toggle ──────────────────────────────────────────────────────────
+document.getElementById('unscanned-btn').addEventListener('click', () => {{
+  showUnscanned = !showUnscanned;
+  document.getElementById('unscanned-btn').classList.toggle('on', showUnscanned);
+  buildLayers();
 }});
 
 // ── Overlays ──────────────────────────────────────────────────────────────────
@@ -1087,20 +1165,69 @@ def main():
     if not username or not token:
         raise RuntimeError("M2M_USERNAME and M2M_TOKEN must be set")
 
-    print("Logging in to USGS M2M API...")
+    db_path = "scenes.db"
+    if not os.path.exists(db_path):
+        raise RuntimeError(
+            f"{db_path} not found. Run monitor.py first to populate the database."
+        )
+
+    print(f"Reading scenes from {db_path}...")
+    import sqlite3
+    all_rows = []
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.execute(
+            "SELECT entity_id, dataset, display_id, acquisition_date, available FROM scenes"
+        )
+        all_rows = [dict(r) for r in cursor.fetchall()]
+    print(f"  {len(all_rows):,} total scenes in DB")
+
+    print("Fetching spatial bounds and browse URLs from USGS M2M API...")
     api_key = login(username, token)
 
     all_features = []
     try:
-        for dataset, filter_id in DATASETS.items():
-            print(f"\n  {DATASET_LABELS[dataset]}...")
-            scenes = search_available(api_key, dataset, filter_id)
+        for dataset in DATASETS:
+            rows = [r for r in all_rows if r["dataset"] == dataset]
+            if not rows:
+                continue
+            print(f"\n  {DATASET_LABELS[dataset]} — {len(rows):,} scenes...")
+
+            # Fetch full metadata in batches of 250 (M2M entityIds limit)
+            entity_ids = [r["entity_id"] for r in rows]
+            avail_map  = {r["entity_id"]: bool(r["available"]) for r in rows}
+            batch_size = 250
             before = len(all_features)
-            for scene in scenes:
-                f = scene_to_feature(scene, dataset)
-                if f:
-                    all_features.append(f)
-            print(f"  {len(all_features) - before:,} features with spatial bounds")
+
+            for i in range(0, len(entity_ids), batch_size):
+                batch = entity_ids[i:i + batch_size]
+                resp = requests.post(
+                    M2M_URL + "scene-metadata-list",
+                    json={{
+                        "datasetName":  dataset,
+                        "entityIds":    batch,
+                        "metadataType": "full",
+                    }},
+                    headers={{"X-Auth-Token": api_key}},
+                    timeout=120,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                if data.get("errorCode"):
+                    print(f"    API error: {{data['errorMessage']}}")
+                    continue
+                scenes = data.get("data", []) or []
+                for scene in scenes:
+                    eid  = scene.get("entityId", "")
+                    avail = avail_map.get(eid, True)
+                    f = scene_to_feature(scene, dataset, available=avail)
+                    if f:
+                        all_features.append(f)
+                if i % 2500 == 0 and i > 0:
+                    print(f"    {i:,} / {{len(entity_ids):,}} processed...")
+                time.sleep(0.2)
+
+            print(f"  {{len(all_features) - before:,}} features with spatial bounds")
     finally:
         logout(api_key)
 
