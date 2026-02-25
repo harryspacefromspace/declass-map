@@ -386,7 +386,14 @@ class Database:
                     acquisition_date TEXT,
                     publish_date TEXT,
                     first_seen_available TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    notified INTEGER DEFAULT 0
+                    notified INTEGER DEFAULT 0,
+                    available INTEGER DEFAULT 1
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT
                 )
             """)
             conn.execute("""
@@ -395,6 +402,15 @@ class Database:
             conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_notified ON scenes(notified)
             """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_available ON scenes(available)
+            """)
+            # Migrate existing DBs: add available column if missing
+            try:
+                conn.execute("ALTER TABLE scenes ADD COLUMN available INTEGER DEFAULT 1")
+                logger.info("Migrated DB: added 'available' column")
+            except Exception:
+                pass  # Column already exists
             conn.commit()
     
     def get_known_entity_ids(self, dataset: str) -> set:
@@ -406,27 +422,7 @@ class Database:
             )
             return {row[0] for row in cursor.fetchall()}
     
-    def add_scenes(self, scenes: list, dataset: str):
-        """Add newly discovered scenes to the database."""
-        with sqlite3.connect(self.db_path) as conn:
-            conn.executemany(
-                """
-                INSERT OR IGNORE INTO scenes 
-                (entity_id, dataset, display_id, acquisition_date, publish_date)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                [
-                    (
-                        s.get("entityId"),
-                        dataset,
-                        s.get("displayId"),
-                        extract_acquisition_date(s),
-                        s.get("publishDate", "").split(" ")[0] if s.get("publishDate") else None
-                    )
-                    for s in scenes
-                ]
-            )
-            conn.commit()
+
     
     def mark_notified(self, entity_ids: list):
         """Mark scenes as notified."""
@@ -462,6 +458,68 @@ class Database:
             return stats
 
 
+    def is_seeded(self) -> bool:
+        """Return True if the full unscanned scene seed has been run."""
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT value FROM meta WHERE key = 'all_scenes_seeded'"
+            ).fetchone()
+            return bool(row and row[0] == '1')
+
+    def mark_seeded(self):
+        """Record that the full all-scenes seed has been completed."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES ('all_scenes_seeded', '1')"
+            )
+            conn.commit()
+        logger.info("Marked database as fully seeded")
+
+    def add_scenes(self, scenes: list, dataset: str, available: bool = True):
+        """Add scenes to the database, setting their availability flag."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.executemany(
+                """
+                INSERT OR IGNORE INTO scenes
+                (entity_id, dataset, display_id, acquisition_date, publish_date, available)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        s.get("entityId"),
+                        dataset,
+                        s.get("displayId"),
+                        extract_acquisition_date(s),
+                        s.get("publishDate", "").split(" ")[0] if s.get("publishDate") else None,
+                        1 if available else 0,
+                    )
+                    for s in scenes
+                ]
+            )
+            conn.commit()
+
+    def mark_available(self, entity_ids: list):
+        """Flip scenes from unscanned → available (they've been digitised)."""
+        if not entity_ids:
+            return
+        with sqlite3.connect(self.db_path) as conn:
+            conn.executemany(
+                "UPDATE scenes SET available = 1 WHERE entity_id = ?",
+                [(eid,) for eid in entity_ids]
+            )
+            conn.commit()
+        logger.info(f"  Marked {len(entity_ids)} scenes as now available")
+
+    def get_unavailable_ids(self, dataset: str) -> set:
+        """Return entity IDs of scenes not yet scanned/available."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                "SELECT entity_id FROM scenes WHERE dataset = ? AND available = 0",
+                (dataset,)
+            )
+            return {row[0] for row in cursor.fetchall()}
+
+
 class USGSClient:
     """Client for USGS M2M API."""
     
@@ -470,48 +528,24 @@ class USGSClient:
         self.token = token
         self.api_key: Optional[str] = None
     
-    def _request(self, endpoint: str, data: dict = None, _retries: int = 5) -> dict:
-        """Make API request with exponential backoff retry on transient errors."""
-        import time as _time
-
+    def _request(self, endpoint: str, data: dict = None) -> dict:
+        """Make API request."""
         headers = {}
         if self.api_key:
             headers["X-Auth-Token"] = self.api_key
-
-        last_exc = None
-        for attempt in range(_retries):
-            try:
-                response = requests.post(
-                    f"{API_URL}{endpoint}",
-                    json=data or {},
-                    headers=headers,
-                    timeout=180,
-                )
-                response.raise_for_status()
-
-                result = response.json()
-                if result.get("errorCode"):
-                    raise Exception(f"API Error: {result.get('errorMessage')}")
-
-                return result.get("data")
-
-            except (
-                requests.exceptions.ChunkedEncodingError,
-                requests.exceptions.ConnectionError,
-                requests.exceptions.Timeout,
-                requests.exceptions.ReadTimeout,
-            ) as exc:
-                last_exc = exc
-                if attempt < _retries - 1:
-                    wait = 2 ** attempt  # 1, 2, 4, 8, 16 seconds
-                    logger.warning(
-                        f"Transient error on {endpoint} (attempt {attempt + 1}/{_retries}), "
-                        f"retrying in {wait}s: {exc}"
-                    )
-                    _time.sleep(wait)
-                else:
-                    logger.error(f"All {_retries} attempts failed for {endpoint}")
-                    raise last_exc
+        
+        response = requests.post(
+            f"{API_URL}{endpoint}",
+            json=data or {},
+            headers=headers
+        )
+        response.raise_for_status()
+        
+        result = response.json()
+        if result.get("errorCode"):
+            raise Exception(f"API Error: {result.get('errorMessage')}")
+        
+        return result.get("data")
     
     def login(self):
         """Authenticate using application token and get API key."""
@@ -571,6 +605,37 @@ class USGSClient:
                 break
         
         logger.info(f"  Total available scenes found: {len(all_scenes)}")
+        return all_scenes
+
+    def search_all_scenes(self, dataset: str, max_results: int = 1000000) -> list:
+        """
+        Search for ALL scenes in a dataset regardless of availability.
+        Used once during initial seed to discover unscanned scenes.
+        """
+        logger.info(f"  Fetching ALL scenes for {dataset} (seed run)...")
+        all_scenes = []
+        starting_number = 1
+        batch_size = 10000
+
+        while True:
+            result = self._request("scene-search", {
+                "datasetName": dataset,
+                "maxResults": batch_size,
+                "startingNumber": starting_number,
+                "metadataType": "full",
+                "sceneFilter": {}
+            })
+            scenes = result.get("results", [])
+            if not scenes:
+                break
+            all_scenes.extend(scenes)
+            logger.info(f"    {len(all_scenes):,} total scenes retrieved...")
+            if len(all_scenes) >= max_results or len(scenes) < batch_size:
+                break
+            starting_number += batch_size
+            time.sleep(0.5)
+
+        logger.info(f"  Total scenes (all): {len(all_scenes)}")
         return all_scenes
     
     def get_download_options(self, dataset: str, entity_ids: list) -> list:
@@ -936,38 +1001,63 @@ def run_monitor(config: dict):
         client.login()
         
         new_scenes_total = []
-        
+        seeded = db.is_seeded()
+
+        if not seeded:
+            logger.info("\n*** FIRST RUN: seeding all scenes (available + unscanned) ***")
+            logger.info("This will take longer than normal daily runs.\n")
+
         for dataset in DATASETS:
             logger.info(f"\n{'='*50}")
             logger.info(f"Processing {dataset}")
             logger.info('='*50)
-            
-            # Get scenes we already know about
+
             known_ids = db.get_known_entity_ids(dataset)
             logger.info(f"Known scenes in database: {len(known_ids)}")
-            
-            # Search for all available scenes in dataset
-            # (filtered by Download Available = Y at API level)
+
+            # ── Always fetch currently-available scenes ──────────────────────
             filter_id = DOWNLOAD_AVAILABLE_FILTER_IDS[dataset]
             available_scenes = client.search_dataset(dataset, filter_id)
-            
-            # Find scenes we haven't seen before
+            available_ids = {s.get("entityId") for s in available_scenes}
+
+            # Scenes we haven't seen at all yet (brand new available scenes)
             new_scenes = [
-                s for s in available_scenes 
+                s for s in available_scenes
                 if s.get("entityId") not in known_ids
             ]
-            
-            if not new_scenes:
+            if new_scenes:
+                logger.info(f"New available scenes: {len(new_scenes)}")
+                db.add_scenes(new_scenes, dataset, available=True)
+                new_scenes_total.extend([{**s, "dataset": dataset} for s in new_scenes])
+            else:
                 logger.info("No new available scenes found")
-                continue
-            
-            logger.info(f"New available scenes: {len(new_scenes)}")
-            
-            # Add to database
-            db.add_scenes(new_scenes, dataset)
-            new_scenes_total.extend([
-                {**s, "dataset": dataset} for s in new_scenes
-            ])
+
+            # Scenes we knew as unscanned that are now available (got digitised)
+            newly_scanned = [
+                eid for eid in available_ids
+                if eid in db.get_unavailable_ids(dataset)
+            ]
+            if newly_scanned:
+                logger.info(f"Scenes newly scanned/digitised: {len(newly_scanned)}")
+                db.mark_available(newly_scanned)
+
+            # ── Seed run only: fetch ALL scenes to capture unscanned ─────────
+            if not seeded:
+                all_scenes = client.search_all_scenes(dataset)
+                unscanned = [
+                    s for s in all_scenes
+                    if s.get("entityId") not in known_ids
+                    and s.get("entityId") not in available_ids
+                ]
+                if unscanned:
+                    logger.info(f"Unscanned (not yet digitised) scenes: {len(unscanned)}")
+                    db.add_scenes(unscanned, dataset, available=False)
+                else:
+                    logger.info("No unscanned scenes found for this dataset")
+
+        if not seeded:
+            db.mark_seeded()
+            logger.info("\nSeed complete — future runs will only check for newly available scenes.")
         
         # Handle notifications for new scenes
         if new_scenes_total:
