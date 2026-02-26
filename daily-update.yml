@@ -1,0 +1,102 @@
+name: Update Declassified Map
+
+on:
+  schedule:
+    - cron: "0 5 * * *"   # Every day at 5am UTC
+  workflow_dispatch:        # Manual trigger from GitHub Actions tab
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write       # Required to push index.html and create/update releases
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install requests staticmap Pillow
+
+      - name: Generate config.json from secrets
+        run: |
+          cat > config.json << 'CONFIGEOF'
+          {
+            "usgs": {
+              "username": "${{ secrets.M2M_USERNAME }}",
+              "token": "${{ secrets.M2M_TOKEN }}"
+            },
+            "database": "scenes.db",
+            "notifications": {
+              "telegram": {
+                "enabled": false
+              }
+            }
+          }
+          CONFIGEOF
+
+      # Restore scenes.db from the latest release (avoids re-seeding every run)
+      - name: Restore scenes.db from release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view latest-data --repo ${{ github.repository }} > /dev/null 2>&1; then
+            echo "Downloading scenes.db from latest-data release..."
+            gh release download latest-data \
+              --repo ${{ github.repository }} \
+              --pattern "scenes.db" \
+              --output scenes.db \
+              --clobber || echo "scenes.db not in release yet — will create fresh"
+          else
+            echo "No latest-data release found — fresh start"
+          fi
+
+      - name: Step 1 — Run monitoring script (updates scenes.db)
+        run: python monitor.py
+
+      - name: Step 2 — Build map chunks from scenes.db
+        env:
+          RELEASE_TAG: latest-data
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: python fetch_and_build.py
+
+      # Upload data files to GitHub Release (bypasses 100 MB git limit)
+      - name: Upload data to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="latest-data"
+
+          # Delete and recreate release so assets are always fresh
+          gh release delete "$TAG" --repo ${{ github.repository }} --yes 2>/dev/null || true
+          gh release create "$TAG" \
+            --repo ${{ github.repository }} \
+            --title "Map Data $(date -u +%Y-%m-%d)" \
+            --notes "Auto-generated map data. Do not edit manually." \
+            --latest=false
+
+          # Upload chunk files
+          for f in scenes_chunk_*.geojson; do
+            [ -f "$f" ] && gh release upload "$TAG" "$f" \
+              --repo ${{ github.repository }} --clobber && echo "Uploaded $f"
+          done
+
+          # Upload scenes.db so next run can restore it
+          gh release upload "$TAG" scenes.db \
+            --repo ${{ github.repository }} --clobber
+          echo "Uploaded scenes.db"
+
+      # Only commit the small index.html to the repo
+      - name: Commit index.html
+        run: |
+          git config user.name  "declass-map-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add index.html
+          git diff --staged --quiet || git commit -m "Daily update $(date -u +%Y-%m-%d)"
+          git push
