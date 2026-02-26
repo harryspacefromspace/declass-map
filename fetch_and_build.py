@@ -516,6 +516,52 @@ input[type=range]{{position:absolute;top:0;left:0;width:100%;height:100%;opacity
   padding:4px 10px;border:1px solid #4d9fff22;border-radius:5px;transition:all .12s;
 }}
 .pu a:hover{{background:#4d9fff12;border-color:#4d9fff44}}
+.pu-dl-btn{{
+  font-size:10.5px;color:#44bb77;background:transparent;
+  padding:4px 10px;border:1px solid #44bb7722;border-radius:5px;
+  cursor:pointer;transition:all .12s;white-space:nowrap;
+}}
+.pu-dl-btn:hover{{background:#44bb7712;border-color:#44bb7744}}
+.pu-dl-btn:disabled{{opacity:.35;cursor:default}}
+.pu-dl-btn.loading{{color:#888;border-color:#2a2a2a;cursor:wait}}
+
+/* Download modal */
+#dl-modal{{
+  position:fixed;inset:0;z-index:9000;
+  display:none;align-items:center;justify-content:center;
+  background:rgba(0,0,0,.75);backdrop-filter:blur(4px);
+}}
+#dl-modal.open{{display:flex}}
+#dl-box{{
+  background:#111;border:1px solid #2a2a2a;border-radius:12px;
+  padding:20px 24px;width:340px;max-width:90vw;
+  box-shadow:0 24px 64px rgba(0,0,0,.95);
+}}
+#dl-box h4{{font-size:12px;color:#ccc;margin-bottom:4px;font-weight:600}}
+#dl-box .dl-sub{{font-size:10.5px;color:#555;margin-bottom:16px}}
+.dl-field{{margin-bottom:10px}}
+.dl-field label{{font-size:10px;color:#444;text-transform:uppercase;letter-spacing:.08em;display:block;margin-bottom:4px}}
+.dl-field input{{
+  width:100%;background:#161616;border:1px solid #242424;color:#ccc;
+  padding:6px 10px;border-radius:6px;font-size:11px;outline:none;
+  box-sizing:border-box;transition:border-color .15s;
+}}
+.dl-field input:focus{{border-color:#444}}
+#dl-status{{font-size:10.5px;color:#666;min-height:16px;margin:10px 0;line-height:1.5}}
+#dl-status.err{{color:#cc4444}}
+#dl-status.ok{{color:#44bb77}}
+.dl-actions{{display:flex;gap:8px;margin-top:14px}}
+.dl-actions button{{
+  flex:1;padding:7px 0;border-radius:6px;font-size:11px;cursor:pointer;
+  border:1px solid;transition:all .12s;
+}}
+#dl-go{{background:#0d2218;border-color:#44bb7744;color:#44bb77}}
+#dl-go:hover{{background:#132d1f;border-color:#44bb77aa}}
+#dl-go:disabled{{opacity:.4;cursor:wait}}
+#dl-cancel{{background:transparent;border-color:#2a2a2a;color:#555}}
+#dl-cancel:hover{{border-color:#444;color:#888}}
+#dl-save-creds{{font-size:10px;color:#444;display:flex;align-items:center;gap:6px;margin-top:10px;cursor:pointer}}
+#dl-save-creds input{{width:auto;flex-shrink:0}}
 .leaflet-control-zoom{{border:1px solid #1e1e1e!important;border-radius:6px!important;overflow:hidden}}
 .leaflet-control-zoom a{{
   background:#111!important;color:#555!important;border-color:#1e1e1e!important;
@@ -632,6 +678,28 @@ input[type=range]{{position:absolute;top:0;left:0;width:100%;height:100%;opacity
 </div>
 <div id="counter">0 of {total:,} scenes</div>
 <div id="usgs-status" class="checking" title="USGS EarthExplorer API status — checks every 60s">
+
+<!-- Download modal -->
+<div id="dl-modal">
+  <div id="dl-box">
+    <h4>Download Scene</h4>
+    <div class="dl-sub" id="dl-scene-id">—</div>
+    <div class="dl-field">
+      <label>USGS Username</label>
+      <input id="dl-user" type="text" placeholder="your EarthExplorer username" autocomplete="username" />
+    </div>
+    <div class="dl-field">
+      <label>M2M App Token</label>
+      <input id="dl-token" type="password" placeholder="application token (not password)" autocomplete="off" />
+    </div>
+    <div id="dl-status"></div>
+    <label id="dl-save-creds"><input type="checkbox" id="dl-remember"> Remember credentials in this browser</label>
+    <div class="dl-actions">
+      <button id="dl-go">⬇ Download</button>
+      <button id="dl-cancel">Cancel</button>
+    </div>
+  </div>
+</div>
   <span id="status-dot"></span>
   <span id="status-label">USGS …</span>
 </div>
@@ -833,6 +901,9 @@ function renderPopup() {{
     <div class="meta">📅 ${{date}}</div>
     <div class="pu-footer">
       <a href="${{p.earthExplorerUrl}}" target="_blank">EarthExplorer ↗</a>
+      ${{p.available
+        ? `<button class="pu-dl-btn" data-eid="${{p.entityId}}" data-ds="${{p.dataset}}">⬇ Download</button>`
+        : ''}}
       ${{nav}}
     </div>
   </div>`);
@@ -842,6 +913,15 @@ function renderPopup() {{
     const next = document.getElementById('pu-next');
     if (prev) prev.addEventListener('click', e => {{ e.stopPropagation(); puIdx--; renderPopup(); }});
     if (next) next.addEventListener('click', e => {{ e.stopPropagation(); puIdx++; renderPopup(); }});
+
+    // Wire download button
+    const dlBtn = popup.getElement()?.querySelector('.pu-dl-btn');
+    if (dlBtn) {{
+      dlBtn.addEventListener('click', e => {{
+        e.stopPropagation();
+        openDownloadModal(dlBtn.dataset.eid, dlBtn.dataset.ds);
+      }});
+    }}
 
     // Stop all clicks inside the popup reaching the map
     const el = popup.getElement();
@@ -1205,6 +1285,137 @@ ovPopupStyle.textContent = `.ov-popup .leaflet-popup-content-wrapper {{
 .ov-popup .leaflet-popup-tip-container{{display:none!important}}
 .ov-popup .leaflet-popup-close-button{{color:#555!important;top:2px!important;right:4px!important}}`;
 document.head.appendChild(ovPopupStyle);
+
+// ── M2M Download ──────────────────────────────────────────────────────────────
+const M2M = 'https://m2m.cr.usgs.gov/api/api/json/stable/';
+
+async function m2mPost(endpoint, body, apiKey) {{
+  const headers = {{'Content-Type': 'application/json'}};
+  if (apiKey) headers['X-Auth-Token'] = apiKey;
+  const resp = await fetch(M2M + endpoint, {{
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+  }});
+  if (!resp.ok) throw new Error(`HTTP ${{resp.status}} on ${{endpoint}}`);
+  const data = await resp.json();
+  if (data.errorCode) throw new Error(data.errorMessage || data.errorCode);
+  return data.data;
+}}
+
+let dlCurrentEid = null, dlCurrentDs = null;
+
+function openDownloadModal(entityId, dataset) {{
+  dlCurrentEid = entityId;
+  dlCurrentDs  = dataset;
+  document.getElementById('dl-scene-id').textContent = entityId;
+  document.getElementById('dl-status').textContent = '';
+  document.getElementById('dl-status').className = '';
+  document.getElementById('dl-go').disabled = false;
+  // Restore remembered creds
+  const saved = JSON.parse(localStorage.getItem('m2m_creds') || 'null');
+  if (saved) {{
+    document.getElementById('dl-user').value  = saved.user  || '';
+    document.getElementById('dl-token').value = saved.token || '';
+    document.getElementById('dl-remember').checked = true;
+  }}
+  document.getElementById('dl-modal').classList.add('open');
+}}
+
+function setDlStatus(msg, cls='') {{
+  const el = document.getElementById('dl-status');
+  el.textContent = msg;
+  el.className = cls;
+}}
+
+document.getElementById('dl-cancel').addEventListener('click', () => {{
+  document.getElementById('dl-modal').classList.remove('open');
+}});
+document.getElementById('dl-modal').addEventListener('click', e => {{
+  if (e.target === document.getElementById('dl-modal'))
+    document.getElementById('dl-modal').classList.remove('open');
+}});
+
+document.getElementById('dl-go').addEventListener('click', async () => {{
+  const username = document.getElementById('dl-user').value.trim();
+  const token    = document.getElementById('dl-token').value.trim();
+  if (!username || !token) {{ setDlStatus('Enter username and token.', 'err'); return; }}
+
+  if (document.getElementById('dl-remember').checked) {{
+    localStorage.setItem('m2m_creds', JSON.stringify({{user: username, token}}));
+  }} else {{
+    localStorage.removeItem('m2m_creds');
+  }}
+
+  const btn = document.getElementById('dl-go');
+  btn.disabled = true;
+
+  try {{
+    // 1. Login
+    setDlStatus('Logging in…');
+    const apiKey = await m2mPost('login-token', {{username, token}});
+
+    try {{
+      // 2. Get download options for this scene
+      setDlStatus('Fetching download options…');
+      const options = await m2mPost('download-options', {{
+        datasetName: dlCurrentDs,
+        entityIds:   [dlCurrentEid],
+      }}, apiKey);
+
+      // Pick best product: prefer "Bundle" or largest available
+      const available = (options || []).filter(o => o.available);
+      if (!available.length) {{
+        throw new Error('No downloadable products found for this scene.');
+      }}
+      // Prefer bundle download, fall back to first available
+      const product = available.find(o => /bundle/i.test(o.productName)) || available[0];
+
+      // 3. Request download URL
+      setDlStatus('Requesting download URL…');
+      const dlResult = await m2mPost('download-request', {{
+        downloads: [{{ entityId: dlCurrentEid, productId: product.id }}],
+        label: 'declass_map',
+      }}, apiKey);
+
+      let url = dlResult?.availableDownloads?.[0]?.url;
+
+      // 4. If preparing, poll retrieve until ready (max 2 min)
+      if (!url && dlResult?.preparingDownloads?.length) {{
+        setDlStatus('File is being staged — polling…');
+        const deadline = Date.now() + 120_000;
+        while (Date.now() < deadline) {{
+          await new Promise(r => setTimeout(r, 5000));
+          setDlStatus(`Polling for staged file… (${{Math.round((deadline - Date.now()) / 1000)}}s left)`);
+          const retrieved = await m2mPost('download-retrieve', {{label: 'declass_map'}}, apiKey);
+          url = retrieved?.available?.[0]?.url;
+          if (url) break;
+        }}
+      }}
+
+      if (!url) throw new Error('Timed out waiting for download URL. Try again shortly.');
+
+      // 5. Trigger download
+      setDlStatus('Starting download…', 'ok');
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = '';
+      a.target = '_blank';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setDlStatus(`✓ Download started — ${{product.productName}}`, 'ok');
+
+    }} finally {{
+      // Always logout
+      try {{ await m2mPost('logout', {{}}, apiKey); }} catch(e) {{}}
+    }}
+
+  }} catch(err) {{
+    setDlStatus(`Error: ${{err.message}}`, 'err');
+    btn.disabled = false;
+  }}
+}});
 
 // ── USGS status check ─────────────────────────────────────────────────────────
 // We fetch the M2M API root page — it returns a small HTML page when up,
