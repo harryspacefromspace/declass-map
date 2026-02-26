@@ -6,6 +6,7 @@ date range filters. Filters start OFF (additive model — click to show).
 """
 
 import os
+import math
 import json
 import time
 import requests
@@ -849,7 +850,6 @@ def main():
     print(f"Satellite types: {sat_seen}")
 
     # ── Write chunked GeoJSON (max ~60 MB each, GitHub Releases limit is 2 GB) ──
-    import math, os
     chunk_size  = 50_000  # features per chunk
     features    = geojson["features"]
     n_chunks    = max(1, math.ceil(len(features) / chunk_size))
