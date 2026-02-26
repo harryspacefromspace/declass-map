@@ -1,0 +1,265 @@
+#!/usr/bin/env python3
+"""
+download.py — Download declassified satellite scenes from USGS M2M API.
+
+Usage:
+    python download.py ENTITY_ID [ENTITY_ID ...] [options]
+
+Examples:
+    # Download one scene
+    python download.py D1C1001008AA002
+
+    # Download multiple scenes
+    python download.py D1C1001008AA002 D2C1200058A001
+
+    # Use env vars instead of prompting
+    export M2M_USERNAME=myuser
+    export M2M_TOKEN=mytoken
+    python download.py D1C1001008AA002 --dataset corona2
+
+    # Download all scenes from a list file
+    python download.py --from-file scene_ids.txt
+
+    # Dry-run: show what would be downloaded without fetching
+    python download.py D1C1001008AA002 --dry-run
+"""
+
+import os
+import sys
+import time
+import argparse
+import getpass
+import json
+import requests
+from pathlib import Path
+
+M2M_URL = "https://m2m.cr.usgs.gov/api/api/json/stable/"
+
+DATASET_MAP = {
+    # entity ID prefix → dataset name
+    "D1": "corona2",
+    "D2": "declassii",
+    "D3": "declassiii",
+}
+
+DATASET_LABELS = {
+    "corona2":    "Declass I  (CORONA/ARGON/LANYARD)",
+    "declassii":  "Declass II (GAMBIT/HEXAGON)",
+    "declassiii": "Declass III (HEXAGON)",
+}
+
+
+def m2m(endpoint: str, body: dict, api_key: str = None, retries: int = 4) -> dict:
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["X-Auth-Token"] = api_key
+    last = None
+    for attempt in range(retries):
+        try:
+            r = requests.post(M2M_URL + endpoint, json=body, headers=headers, timeout=60)
+            if r.status_code in (502, 503, 504):
+                raise requests.HTTPError(f"{r.status_code}")
+            r.raise_for_status()
+            data = r.json()
+            if data.get("errorCode"):
+                raise RuntimeError(f"API error: {data.get('errorMessage')}")
+            return data.get("data")
+        except Exception as e:
+            last = e
+            if attempt < retries - 1:
+                wait = 2 ** attempt
+                print(f"  ⚠ Retry {attempt + 1}/{retries} after {wait}s ({e})")
+                time.sleep(wait)
+    raise last
+
+
+def guess_dataset(entity_id: str) -> str:
+    prefix = entity_id[:2].upper()
+    return DATASET_MAP.get(prefix, "corona2")
+
+
+def download_file(url: str, dest: Path, label: str):
+    print(f"  ↓ {label}")
+    print(f"    → {dest}")
+    r = requests.get(url, stream=True, timeout=300)
+    r.raise_for_status()
+    total = int(r.headers.get("content-length", 0))
+    done = 0
+    with open(dest, "wb") as f:
+        for chunk in r.iter_content(chunk_size=1 << 20):  # 1 MB
+            f.write(chunk)
+            done += len(chunk)
+            if total:
+                pct = done / total * 100
+                bar = "█" * int(pct / 5) + "░" * (20 - int(pct / 5))
+                print(f"    [{bar}] {pct:.0f}%  {done >> 20} MB / {total >> 20} MB", end="\r")
+    print()
+
+
+def run(args):
+    # ── Credentials ──────────────────────────────────────────────────────────
+    username = args.username or os.environ.get("M2M_USERNAME")
+    token    = args.token    or os.environ.get("M2M_TOKEN")
+    if not username:
+        username = input("USGS Username: ").strip()
+    if not token:
+        token = getpass.getpass("M2M App Token: ")
+
+    # ── Entity IDs ───────────────────────────────────────────────────────────
+    entity_ids = list(args.entity_ids)
+    if args.from_file:
+        path = Path(args.from_file)
+        lines = path.read_text().splitlines()
+        entity_ids += [l.strip() for l in lines if l.strip() and not l.startswith("#")]
+
+    if not entity_ids:
+        print("No entity IDs provided. Use positional args or --from-file.")
+        sys.exit(1)
+
+    print(f"\n{'='*50}")
+    print(f"Scenes to download: {len(entity_ids)}")
+
+    if args.dry_run:
+        print("\nDry run — would download:")
+        for eid in entity_ids:
+            ds = args.dataset or guess_dataset(eid)
+            print(f"  {eid}  ({DATASET_LABELS.get(ds, ds)})")
+        return
+
+    # ── Login ─────────────────────────────────────────────────────────────────
+    print("\nLogging in…")
+    api_key = m2m("login-token", {"username": username, "token": token})
+    print("  ✓ Logged in")
+
+    out_dir = Path(args.output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    errors = []
+
+    try:
+        # Group by dataset for batching
+        by_ds = {}
+        for eid in entity_ids:
+            ds = args.dataset or guess_dataset(eid)
+            by_ds.setdefault(ds, []).append(eid)
+
+        for ds, ids in by_ds.items():
+            print(f"\n── {DATASET_LABELS.get(ds, ds)} ({len(ids)} scenes) ──")
+
+            # Get download options
+            print("  Fetching download options…")
+            options = m2m("download-options", {
+                "datasetName": ds,
+                "entityIds":   ids,
+            }, api_key) or []
+
+            # Build download list
+            downloads = []
+            skipped   = []
+            for opt in options:
+                eid = opt.get("entityId")
+                avail = [p for p in opt.get("downloadOptions", [opt]) if p.get("available")]
+                if not avail:
+                    skipped.append(eid)
+                    continue
+                # Prefer bundle, else first available product
+                product = next((p for p in avail if "bundle" in p.get("productName","").lower()), avail[0])
+                downloads.append({
+                    "entityId":    eid,
+                    "productId":   product.get("id"),
+                    "productName": product.get("productName", ""),
+                })
+
+            if skipped:
+                print(f"  ⚠ {len(skipped)} scenes have no downloadable products: {skipped[:5]}")
+
+            if not downloads:
+                print("  No downloads available for this dataset.")
+                continue
+
+            # Request download URLs
+            print(f"  Requesting URLs for {len(downloads)} scenes…")
+            result = m2m("download-request", {
+                "downloads": [{"entityId": d["entityId"], "productId": d["productId"]} for d in downloads],
+                "label":     "declass_map_cli",
+            }, api_key)
+
+            ready     = {item["entityId"]: item["url"] for item in (result.get("availableDownloads") or [])}
+            preparing = {item["entityId"] for item in (result.get("preparingDownloads") or [])}
+
+            # Poll for preparing downloads
+            if preparing:
+                print(f"  {len(preparing)} files staging — polling (max 3 min)…")
+                deadline = time.time() + 180
+                while preparing and time.time() < deadline:
+                    time.sleep(8)
+                    retrieved = m2m("download-retrieve", {"label": "declass_map_cli"}, api_key) or {}
+                    for item in retrieved.get("available", []):
+                        eid = item.get("entityId")
+                        if eid in preparing:
+                            ready[eid] = item["url"]
+                            preparing.discard(eid)
+                    print(f"    {len(ready)} ready, {len(preparing)} still staging…", end="\r")
+                print()
+                if preparing:
+                    print(f"  ⚠ Timed out waiting for: {list(preparing)[:5]}")
+                    errors.extend(list(preparing))
+
+            # Download ready files
+            for d in downloads:
+                eid = d["entityId"]
+                url = ready.get(eid)
+                if not url:
+                    continue
+                ext  = ".tar" if "bundle" in d["productName"].lower() else ".tif"
+                dest = out_dir / f"{eid}{ext}"
+                if dest.exists() and not args.overwrite:
+                    print(f"  ✓ {eid} already exists, skipping (--overwrite to force)")
+                    continue
+                try:
+                    download_file(url, dest, f"{eid} — {d['productName']}")
+                except Exception as e:
+                    print(f"  ✗ Failed to download {eid}: {e}")
+                    errors.append(eid)
+
+    finally:
+        print("\nLogging out…")
+        try:
+            m2m("logout", {}, api_key)
+        except Exception:
+            pass
+        print("  ✓ Done")
+
+    print(f"\n{'='*50}")
+    print(f"Downloaded to: {out_dir.resolve()}")
+    if errors:
+        print(f"Failed ({len(errors)}): {errors}")
+        sys.exit(1)
+
+
+def main():
+    p = argparse.ArgumentParser(
+        description="Download declassified USGS satellite scenes via M2M API.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__,
+    )
+    p.add_argument("entity_ids", nargs="*", metavar="ENTITY_ID",
+                   help="One or more scene entity IDs (e.g. D1C1001008AA002)")
+    p.add_argument("--from-file", metavar="FILE",
+                   help="Text file with one entity ID per line")
+    p.add_argument("--dataset", choices=["corona2", "declassii", "declassiii"],
+                   help="Force dataset (auto-detected from entity ID prefix by default)")
+    p.add_argument("--output-dir", "-o", default="downloads",
+                   help="Directory to save files (default: ./downloads)")
+    p.add_argument("--username", "-u", metavar="USER",
+                   help="USGS username (or set M2M_USERNAME env var)")
+    p.add_argument("--token", "-t", metavar="TOKEN",
+                   help="M2M app token (or set M2M_TOKEN env var)")
+    p.add_argument("--overwrite", action="store_true",
+                   help="Re-download files that already exist locally")
+    p.add_argument("--dry-run", action="store_true",
+                   help="Show what would be downloaded without fetching anything")
+    run(p.parse_args())
+
+
+if __name__ == "__main__":
+    main()
