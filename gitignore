@@ -1,0 +1,7 @@
+# Rebuilt each run — never commit these
+scenes.db
+available_scenes.geojson
+config.json
+new_scenes.txt
+*.pyc
+__pycache__/
