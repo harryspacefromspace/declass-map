@@ -620,7 +620,10 @@ function setBasemap(key) {{
   activeBmLayers = [];
   const bm = BASEMAPS[key];
   const arr = Array.isArray(bm) ? bm : [bm];
-  arr.forEach(l => {{ l.addTo(map); l.bringToBack(); activeBmLayers.push(l); }});
+  // Add in order: first layer goes furthest back
+  arr.forEach(l => l.addTo(map));
+  arr[0].bringToBack();          // imagery always at the very back
+  activeBmLayers = [...arr];
   document.querySelectorAll('.bm-btn').forEach(b => b.classList.toggle('on', b.dataset.bm===key));
 }}
 setBasemap('dark');
@@ -896,13 +899,13 @@ document.getElementById('search').addEventListener('input', e => {{
 
 // ── Overlays ──────────────────────────────────────────────────────────────────
 const OV_QUERIES = {{
-  airbases: `[out:json][timeout:30];node["military"="airfield"]({{bbox}});out body;`,
-  airfields: `[out:json][timeout:30];node["aeroway"="airstrip"]["military"]({{bbox}});out body;`,
-  silos:    `[out:json][timeout:30];node["military"="missile_silo"]({{bbox}});out body;`,
-  nuclear:  `[out:json][timeout:30];(node["power"="plant"]["plant:source"="nuclear"]({{bbox}});node["military"="nuclear_explosion_site"]({{bbox}}););out body;`,
-  bunkers:  `[out:json][timeout:30];node["military"~"bunker|fortification"]({{bbox}});out body;`,
-  naval:    `[out:json][timeout:30];node["military"="naval_base"]({{bbox}});out body;`,
-  radar:    `[out:json][timeout:30];node["military"~"radar|early_warning"]({{bbox}});out body;`,
+  airbases: `[out:json][timeout:25];(node["military"="airfield"](__BBOX__);way["military"="airfield"](__BBOX__);node["aeroway"="aerodrome"]["military"](__BBOX__););out center;`,
+  airfields: `[out:json][timeout:25];(node["aeroway"="airstrip"](__BBOX__);node["aeroway"="airfield"](__BBOX__);way["aeroway"~"aerodrome|airstrip"](__BBOX__););out center;`,
+  silos:    `[out:json][timeout:25];(node["military"="missile_silo"](__BBOX__);node["military"~"silo|icbm|missile"](__BBOX__););out center;`,
+  nuclear:  `[out:json][timeout:25];(node["power"="plant"]["plant:source"="nuclear"](__BBOX__);way["power"="plant"]["plant:source"="nuclear"](__BBOX__);node["military"="nuclear_explosion_site"](__BBOX__););out center;`,
+  bunkers:  `[out:json][timeout:25];(node["military"~"bunker|fortification|stronghold|checkpoint"](__BBOX__);way["military"~"bunker|fortification"](__BBOX__););out center;`,
+  naval:    `[out:json][timeout:25];(node["military"="naval_base"](__BBOX__);way["military"="naval_base"](__BBOX__);node["harbour"="military"](__BBOX__););out center;`,
+  radar:    `[out:json][timeout:25];(node["military"~"radar|early_warning|range"](__BBOX__);node["man_made"="tower"]["military"](__BBOX__););out center;`,
 }};
 const OV_COLORS = {{
   airbases:'#4d9fff',airfields:'#4d9fff',silos:'#ff4d4d',
@@ -930,23 +933,30 @@ async function loadOverlay(key) {{
   btn && (btn.disabled = true);
   const b = map.getBounds();
   const bbox = `${{b.getSouth().toFixed(3)}},${{b.getWest().toFixed(3)}},${{b.getNorth().toFixed(3)}},${{b.getEast().toFixed(3)}}`;
-  const q = OV_QUERIES[key].replace(/{{bbox}}/g, bbox);
+  const q = OV_QUERIES[key].replace(/__BBOX__/g, bbox);
   try {{
     if (!ovCache[key]) {{
       const resp = await fetch('https://overpass-api.de/api/interpreter', {{
         method:'POST', body:'data='+encodeURIComponent(q)
       }});
+      if (!resp.ok) throw new Error(`Overpass HTTP ${{resp.status}}`);
       ovCache[key] = await resp.json();
     }}
-    const nodes = ovCache[key].elements || [];
+    const elements = ovCache[key].elements || [];
+    // nodes have lat/lon directly; ways/relations have center.lat/center.lon
+    const points = elements.map(el => {{
+      const lat = el.lat ?? el.center?.lat;
+      const lon = el.lon ?? el.center?.lon;
+      return (lat && lon) ? {{ lat, lon, name: el.tags?.name || el.tags?.operator || '' }} : null;
+    }}).filter(Boolean);
     const layer = L.layerGroup(
-      nodes.filter(n=>n.lat).map(n => ovMarker(n.lat, n.lon, n.tags?.name, key))
+      points.map(p => ovMarker(p.lat, p.lon, p.name, key))
     );
     layer.addTo(map);
     ovLayers[key] = layer;
     btn?.classList.add('on');
     const badge = document.getElementById(`badge-${{key}}`);
-    if (badge) badge.textContent = nodes.length || '';
+    if (badge) badge.textContent = points.length || '';
     updateOvToggle();
   }} catch(e) {{ console.warn('Overlay error:', e); }}
   btn && (btn.disabled = false);
