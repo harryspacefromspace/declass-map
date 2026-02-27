@@ -6,7 +6,6 @@ date range filters. Filters start OFF (additive model — click to show).
 """
 
 import os
-import math
 import json
 import time
 import requests
@@ -220,8 +219,8 @@ def scene_to_feature(scene, dataset):
 # HTML builder
 # ---------------------------------------------------------------------------
 
-def build_html(geojson, chunk_urls: list):
-    """Build the map HTML. Features are loaded at runtime from chunk_urls."""
+def build_html(geojson):
+    geojson_str    = json.dumps(geojson)
     generated      = geojson["metadata"]["generated"]
     total          = geojson["metadata"]["total"]
     counts         = geojson["metadata"]["counts"]
@@ -229,7 +228,6 @@ def build_html(geojson, chunk_urls: list):
     year_max       = geojson["metadata"]["year_max"]
     sat_types      = geojson["metadata"]["sat_types"]
     ds_colors_json = json.dumps(DATASET_COLORS)
-    chunk_urls_json = json.dumps(chunk_urls)
 
     counts_html = " &nbsp;|&nbsp; ".join(
         f'<span class="dot" style="background:{DATASET_COLORS[ds]}"></span>'
@@ -352,6 +350,99 @@ input[type=range]{{position:absolute;top:0;left:0;width:100%;height:100%;opacity
 }}
 #counter.has-scenes{{color:#666;border-color:#282828}}
 
+/* ── Overlays button ── */
+#ov-toggle{{
+  position:absolute;top:12px;right:12px;z-index:1000;
+  background:rgba(10,10,10,.85);backdrop-filter:blur(8px);
+  border:1px solid #242424;color:#555;padding:6px 12px 6px 10px;
+  border-radius:8px;font-size:11px;cursor:pointer;
+  display:flex;align-items:center;gap:7px;transition:all .15s;white-space:nowrap;
+}}
+#ov-toggle:hover{{border-color:#444;color:#aaa}}
+#ov-toggle.has-active{{border-color:#6644aa;color:#aa88ff}}
+#ov-toggle svg{{flex-shrink:0;transition:transform .2s}}
+#ov-toggle.open svg{{transform:rotate(180deg)}}
+
+/* ── Overlays panel ── */
+#ov-panel{{
+  position:absolute;top:50px;right:12px;z-index:999;
+  background:rgba(10,10,10,.92);backdrop-filter:blur(12px);
+  border:1px solid #222;border-radius:10px;padding:14px;
+  width:210px;display:none;flex-direction:column;gap:10px;
+}}
+#ov-panel.open{{display:flex}}
+.ov-section{{font-size:9.5px;color:#333;text-transform:uppercase;
+  letter-spacing:.1em;margin-bottom:2px;}}
+.ov-btn{{
+  background:transparent;border:1px solid #1e1e1e;color:#444;
+  padding:5px 10px;border-radius:6px;font-size:10.5px;
+  cursor:pointer;text-align:left;transition:all .12s;
+  display:flex;align-items:center;gap:7px;width:100%;
+}}
+.ov-btn:hover{{border-color:#333;color:#888}}
+.ov-btn.on{{border-color:#6644aa44;color:#aa88ff;background:#6644aa0a}}
+.ov-icon{{font-size:13px;flex-shrink:0}}
+.ov-badge{{margin-left:auto;font-size:9px;color:#333;background:#161616;
+  padding:1px 5px;border-radius:10px;}}
+.ov-btn.on .ov-badge{{color:#6644aa;}}
+
+/* ── USGS status widget ── */
+#usgs-status{{
+  position:absolute;bottom:16px;right:12px;z-index:1000;
+  background:rgba(10,10,10,.85);backdrop-filter:blur(8px);
+  border:1px solid #1e1e1e;color:#3a3a3a;
+  padding:5px 10px 5px 8px;border-radius:20px;
+  font-size:10.5px;display:flex;align-items:center;gap:6px;
+  cursor:default;transition:border-color .3s,color .3s;white-space:nowrap;
+}}
+#usgs-status.up{{color:#555;border-color:#1e3322}}
+#usgs-status.down{{color:#774444;border-color:#441a1a}}
+#usgs-status.checking{{color:#444;border-color:#1e1e1e}}
+#status-dot{{width:7px;height:7px;border-radius:50%;background:#333;flex-shrink:0;transition:background .4s,box-shadow .4s}}
+#usgs-status.up #status-dot{{background:#22cc66;box-shadow:0 0 6px #22cc6699;animation:pulse-up 2.5s ease-in-out infinite}}
+#usgs-status.down #status-dot{{background:#cc3333;box-shadow:0 0 6px #cc333399}}
+#usgs-status.checking #status-dot{{background:#555;animation:pulse-check .8s ease-in-out infinite}}
+@keyframes pulse-check{{0%,100%{{opacity:.3}}50%{{opacity:1}}}}
+@keyframes pulse-up{{0%,100%{{box-shadow:0 0 4px #22cc6666}}50%{{box-shadow:0 0 10px #22cc66cc}}}}
+
+/* ── Download button & modal ── */
+.pu-dl-btn{{
+  font-size:10.5px;color:#44bb77;background:transparent;
+  padding:4px 10px;border:1px solid #44bb7722;border-radius:5px;
+  cursor:pointer;transition:all .12s;white-space:nowrap;
+}}
+.pu-dl-btn:hover{{background:#44bb7712;border-color:#44bb7744}}
+.pu-dl-btn:disabled{{opacity:.35;cursor:default}}
+#dl-modal{{
+  position:fixed;inset:0;z-index:9000;display:none;
+  align-items:center;justify-content:center;
+  background:rgba(0,0,0,.75);backdrop-filter:blur(4px);
+}}
+#dl-modal.open{{display:flex}}
+#dl-box{{
+  background:#111;border:1px solid #2a2a2a;border-radius:12px;
+  padding:20px 24px;width:340px;max-width:90vw;
+  box-shadow:0 24px 64px rgba(0,0,0,.95);
+}}
+#dl-box h4{{font-size:12px;color:#ccc;margin-bottom:4px;font-weight:600}}
+#dl-box .dl-sub{{font-size:10.5px;color:#555;margin-bottom:16px}}
+.dl-field{{margin-bottom:10px}}
+.dl-field label{{font-size:10px;color:#444;text-transform:uppercase;letter-spacing:.08em;display:block;margin-bottom:4px}}
+.dl-field input{{width:100%;background:#161616;border:1px solid #242424;color:#ccc;
+  padding:6px 10px;border-radius:6px;font-size:11px;outline:none;box-sizing:border-box;transition:border-color .15s}}
+.dl-field input:focus{{border-color:#444}}
+#dl-status{{font-size:10.5px;color:#666;min-height:16px;margin:10px 0;line-height:1.5}}
+#dl-status.err{{color:#cc4444}}
+#dl-status.ok{{color:#44bb77}}
+.dl-actions{{display:flex;gap:8px;margin-top:14px}}
+.dl-actions button{{flex:1;padding:7px 0;border-radius:6px;font-size:11px;cursor:pointer;border:1px solid;transition:all .12s}}
+#dl-go{{background:#0d2218;border-color:#44bb7744;color:#44bb77}}
+#dl-go:hover{{background:#132d1f;border-color:#44bb77aa}}
+#dl-go:disabled{{opacity:.4;cursor:wait}}
+#dl-cancel{{background:transparent;border-color:#2a2a2a;color:#555}}
+#dl-cancel:hover{{border-color:#444;color:#888}}
+#dl-save-creds{{font-size:10px;color:#444;display:flex;align-items:center;gap:6px;margin-top:10px;cursor:pointer}}
+
 /* Popup */
 .leaflet-popup-tip-container,.leaflet-popup-tip{{display:none!important}}
 .leaflet-popup-content-wrapper{{
@@ -447,68 +538,64 @@ input[type=range]{{position:absolute;top:0;left:0;width:100%;height:100%;opacity
     <small>Choose a satellite type above to show footprints</small>
   </div>
 </div>
-<div id="load-overlay" style="
-  position:fixed;inset:0;z-index:9999;background:#0a0a0a;
-  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;
-">
-  <div style="font-size:13px;color:#555;letter-spacing:.1em;text-transform:uppercase">Declassified Satellite Map</div>
-  <div style="font-size:10.5px;color:#333" id="load-progress">Loading map data…</div>
-  <div style="width:180px;height:1px;background:#181818;border-radius:1px;overflow:hidden">
-    <div id="load-bar" style="height:100%;background:#2a4a2a;width:0%;transition:width .3s"></div>
-  </div>
-</div>
-</div>
 <div id="counter">0 of {total:,} scenes</div>
 
+<!-- Overlays button -->
+<button id="ov-toggle">
+  <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+    <path d="M1 3h10M1 6h10M1 9h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+  </svg>
+  Overlays
+  <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+    <path d="M2 3.5L5 6.5L8 3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+  </svg>
+</button>
+<div id="ov-panel">
+  <div>
+    <div class="ov-section">✈ Air Power</div>
+    <button class="ov-btn" data-ov="airbases"><span class="ov-icon">✈</span>Military Airbases<span class="ov-badge" id="badge-airbases"></span></button>
+    <button class="ov-btn" data-ov="airfields"><span class="ov-icon">🛩</span>Airfields / Strips<span class="ov-badge" id="badge-airfields"></span></button>
+  </div>
+  <div>
+    <div class="ov-section">☢ Nuclear</div>
+    <button class="ov-btn" data-ov="silos"><span class="ov-icon">🚀</span>ICBM Missile Silos<span class="ov-badge" id="badge-silos"></span></button>
+    <button class="ov-btn" data-ov="nuclear"><span class="ov-icon">☢</span>Nuclear Sites<span class="ov-badge" id="badge-nuclear"></span></button>
+  </div>
+  <div>
+    <div class="ov-section">🛡 Ground Forces</div>
+    <button class="ov-btn" data-ov="bunkers"><span class="ov-icon">🏰</span>Bunkers / Fortifications<span class="ov-badge" id="badge-bunkers"></span></button>
+    <button class="ov-btn" data-ov="naval"><span class="ov-icon">⚓</span>Naval Bases<span class="ov-badge" id="badge-naval"></span></button>
+    <button class="ov-btn" data-ov="radar"><span class="ov-icon">📡</span>Radar / Early Warning<span class="ov-badge" id="badge-radar"></span></button>
+  </div>
+</div>
+
+<!-- USGS status -->
+<div id="usgs-status" class="checking" title="USGS EarthExplorer API — checks every 60s">
+  <span id="status-dot"></span>
+  <span id="status-label">USGS …</span>
+</div>
+
+<!-- Download modal -->
+<div id="dl-modal">
+  <div id="dl-box">
+    <h4>Download Scene</h4>
+    <div class="dl-sub" id="dl-scene-id">—</div>
+    <div class="dl-field"><label>USGS Username</label><input id="dl-user" type="text" placeholder="EarthExplorer username" autocomplete="username"/></div>
+    <div class="dl-field"><label>M2M App Token</label><input id="dl-token" type="password" placeholder="application token (not password)" autocomplete="off"/></div>
+    <div id="dl-status"></div>
+    <label id="dl-save-creds"><input type="checkbox" id="dl-remember"> Remember credentials in this browser</label>
+    <div class="dl-actions">
+      <button id="dl-go">⬇ Download</button>
+      <button id="dl-cancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
 <script>
-const CHUNK_URLS = {chunk_urls_json};
-const DS_COLORS  = {ds_colors_json};
-const YEAR_MIN   = {year_min};
-const YEAR_MAX   = {year_max};
-
-// ── Chunk loader ─────────────────────────────────────────────────────────────
-// Fetches all GeoJSON chunks in parallel, merges them, then fires onReady()
-let GEOJSON = null;
-const _loadProgress = document.getElementById('load-progress');
-
-async function loadAllChunks() {{
-  const results = await Promise.all(
-    CHUNK_URLS.map((url, i) =>
-      fetch(url)
-        .then(r => {{ if (!r.ok) throw new Error(`Chunk ${{i}} failed: ${{r.status}}`); return r.json(); }})
-        .then(data => {{ _updateLoadUI(i + 1, CHUNK_URLS.length); return data.features || []; }})
-    )
-  );
-  const allFeats = results.flat();
-  GEOJSON = {{ type: "FeatureCollection", features: allFeats }};
-  _loadProgress && (_loadProgress.style.display = 'none');
-  onReady();
-}}
-
-function _updateLoadUI(done, total) {{
-  if (!_loadProgress) return;
-  const pct = Math.round(done / total * 100);
-  _loadProgress.textContent = `Loading map data… ${{done}}/${{total}} (${{pct}}%)`;
-}}
-
-loadAllChunks().catch(err => {{
-  console.error('Failed to load map data:', err);
-  if (_loadProgress) _loadProgress.textContent = 'Failed to load map data. Try refreshing.';
-}});
-
-// ── Update load bar helper ───────────────────────────────────────────────────
-const _origUpdateLoadUI = _updateLoadUI;
-// Override to also update bar width
-window._updateLoadUI = function(done, total) {{
-  _origUpdateLoadUI(done, total);
-  const bar = document.getElementById('load-bar');
-  if (bar) bar.style.width = Math.round(done / total * 100) + '%';
-}};
-
-function onReady() {{
-  // Fade out and remove the loading overlay
-  const ov = document.getElementById('load-overlay');
-  if (ov) {{ ov.style.opacity = '0'; setTimeout(() => ov.remove(), 600); }}
+const GEOJSON   = {geojson_str};
+const DS_COLORS = {ds_colors_json};
+const YEAR_MIN  = {year_min};
+const YEAR_MAX  = {year_max};
 
 // ── Leaflet ───────────────────────────────────────────────────────────────────
 const map = L.map('map', {{center:[35,30], zoom:2, preferCanvas:true, zoomControl:true}});
@@ -681,6 +768,7 @@ function renderPopup() {{
     <div class="meta">📅 ${{date}}</div>
     <div class="pu-footer">
       <a href="${{p.earthExplorerUrl}}" target="_blank">EarthExplorer ↗</a>
+      <button class="pu-dl-btn" data-eid="${{p.entityId}}" data-ds="${{p.dataset}}">⬇ Download</button>
       ${{nav}}
     </div>
   </div>`);
@@ -690,6 +778,11 @@ function renderPopup() {{
     const next = document.getElementById('pu-next');
     if (prev) prev.addEventListener('click', ()=>{{ puIdx--; renderPopup(); }});
     if (next) next.addEventListener('click', ()=>{{ puIdx++; renderPopup(); }});
+    const dlBtn = popup.getElement()?.querySelector('.pu-dl-btn');
+    if (dlBtn) dlBtn.addEventListener('click', e => {{
+      e.stopPropagation();
+      openDownloadModal(dlBtn.dataset.eid, dlBtn.dataset.ds);
+    }});
   }}, 0);
 }}
 
@@ -777,14 +870,211 @@ document.getElementById('reset-btn').addEventListener('click', () => {{
 document.querySelectorAll('.bm-btn').forEach(btn =>
   btn.addEventListener('click', () => setBasemap(btn.dataset.bm)));
 
-// ── Search ────────────────────────────────────────────────────────────────────
+// ── Search with zoom ─────────────────────────────────────────────────────────
 let st;
 document.getElementById('search').addEventListener('input', e => {{
   clearTimeout(st);
-  st=setTimeout(()=>{{ searchQ=e.target.value.trim(); buildLayers(); }},300);
+  st = setTimeout(() => {{
+    searchQ = e.target.value.trim();
+    buildLayers();
+    if (searchQ.length >= 4) {{
+      const matches = GEOJSON.features.filter(f =>
+        (f.properties.displayId || '').toLowerCase().includes(searchQ.toLowerCase()) ||
+        (f.properties.entityId  || '').toLowerCase().includes(searchQ.toLowerCase())
+      );
+      if (matches.length === 1) {{
+        const b = L.geoJSON(matches[0]).getBounds();
+        if (b.isValid()) map.fitBounds(b, {{padding:[40,40], maxZoom:10}});
+      }} else if (matches.length > 1 && matches.length <= 50) {{
+        const group = L.featureGroup(matches.map(f => L.geoJSON(f)));
+        const b = group.getBounds();
+        if (b.isValid()) map.fitBounds(b, {{padding:[40,40], maxZoom:8}});
+      }}
+    }}
+  }}, 300);
 }});
 
-}} // end onReady()
+// ── Overlays ──────────────────────────────────────────────────────────────────
+const OV_QUERIES = {{
+  airbases: `[out:json][timeout:30];node["military"="airfield"]({{bbox}});out body;`,
+  airfields: `[out:json][timeout:30];node["aeroway"="airstrip"]["military"]({{bbox}});out body;`,
+  silos:    `[out:json][timeout:30];node["military"="missile_silo"]({{bbox}});out body;`,
+  nuclear:  `[out:json][timeout:30];(node["power"="plant"]["plant:source"="nuclear"]({{bbox}});node["military"="nuclear_explosion_site"]({{bbox}}););out body;`,
+  bunkers:  `[out:json][timeout:30];node["military"~"bunker|fortification"]({{bbox}});out body;`,
+  naval:    `[out:json][timeout:30];node["military"="naval_base"]({{bbox}});out body;`,
+  radar:    `[out:json][timeout:30];node["military"~"radar|early_warning"]({{bbox}});out body;`,
+}};
+const OV_COLORS = {{
+  airbases:'#4d9fff',airfields:'#4d9fff',silos:'#ff4d4d',
+  nuclear:'#ff9933',bunkers:'#888',naval:'#4dffff',radar:'#cc44ff'
+}};
+const ovLayers = {{}};
+const ovCache  = {{}};
+
+function ovMarker(lat, lon, name, key) {{
+  const c = OV_COLORS[key] || '#fff';
+  return L.circleMarker([lat, lon], {{
+    radius:5, color:c, fillColor:c, fillOpacity:.7, weight:1.5, opacity:.9
+  }}).bindPopup(`<div style="font-size:11px;color:#ccc;background:#141414;padding:6px 10px;border-radius:6px">${{name||'Unknown'}}</div>`,
+    {{className:'ov-popup', closeButton:false}});
+}}
+
+async function loadOverlay(key) {{
+  const btn = document.querySelector(`.ov-btn[data-ov="${{key}}"]`);
+  if (ovLayers[key]) {{
+    map.removeLayer(ovLayers[key]); delete ovLayers[key];
+    btn?.classList.remove('on');
+    updateOvToggle();
+    return;
+  }}
+  btn && (btn.disabled = true);
+  const b = map.getBounds();
+  const bbox = `${{b.getSouth().toFixed(3)}},${{b.getWest().toFixed(3)}},${{b.getNorth().toFixed(3)}},${{b.getEast().toFixed(3)}}`;
+  const q = OV_QUERIES[key].replace(/{{bbox}}/g, bbox);
+  try {{
+    if (!ovCache[key]) {{
+      const resp = await fetch('https://overpass-api.de/api/interpreter', {{
+        method:'POST', body:'data='+encodeURIComponent(q)
+      }});
+      ovCache[key] = await resp.json();
+    }}
+    const nodes = ovCache[key].elements || [];
+    const layer = L.layerGroup(
+      nodes.filter(n=>n.lat).map(n => ovMarker(n.lat, n.lon, n.tags?.name, key))
+    );
+    layer.addTo(map);
+    ovLayers[key] = layer;
+    btn?.classList.add('on');
+    const badge = document.getElementById(`badge-${{key}}`);
+    if (badge) badge.textContent = nodes.length || '';
+    updateOvToggle();
+  }} catch(e) {{ console.warn('Overlay error:', e); }}
+  btn && (btn.disabled = false);
+}}
+
+function updateOvToggle() {{
+  const tog = document.getElementById('ov-toggle');
+  tog.classList.toggle('has-active', Object.keys(ovLayers).length > 0);
+}}
+
+document.getElementById('ov-toggle').addEventListener('click', () => {{
+  const panel = document.getElementById('ov-panel');
+  const tog   = document.getElementById('ov-toggle');
+  panel.classList.toggle('open');
+  tog.classList.toggle('open');
+}});
+document.querySelectorAll('.ov-btn').forEach(btn =>
+  btn.addEventListener('click', () => loadOverlay(btn.dataset.ov))
+);
+
+// ── M2M Download ──────────────────────────────────────────────────────────────
+const M2M = 'https://m2m.cr.usgs.gov/api/api/json/stable/';
+async function m2mPost(endpoint, body, apiKey) {{
+  const headers = {{'Content-Type':'application/json'}};
+  if (apiKey) headers['X-Auth-Token'] = apiKey;
+  const resp = await fetch(M2M + endpoint, {{method:'POST', headers, body:JSON.stringify(body)}});
+  if (!resp.ok) throw new Error(`HTTP ${{resp.status}} on ${{endpoint}}`);
+  const data = await resp.json();
+  if (data.errorCode) throw new Error(data.errorMessage || data.errorCode);
+  return data.data;
+}}
+let dlEid = null, dlDs = null;
+function openDownloadModal(entityId, dataset) {{
+  dlEid = entityId; dlDs = dataset;
+  document.getElementById('dl-scene-id').textContent = entityId;
+  document.getElementById('dl-status').textContent = '';
+  document.getElementById('dl-status').className = '';
+  document.getElementById('dl-go').disabled = false;
+  const saved = JSON.parse(localStorage.getItem('m2m_creds') || 'null');
+  if (saved) {{
+    document.getElementById('dl-user').value  = saved.user  || '';
+    document.getElementById('dl-token').value = saved.token || '';
+    document.getElementById('dl-remember').checked = true;
+  }}
+  document.getElementById('dl-modal').classList.add('open');
+}}
+document.getElementById('dl-cancel').addEventListener('click', () =>
+  document.getElementById('dl-modal').classList.remove('open'));
+document.getElementById('dl-modal').addEventListener('click', e => {{
+  if (e.target === document.getElementById('dl-modal'))
+    document.getElementById('dl-modal').classList.remove('open');
+}});
+document.getElementById('dl-go').addEventListener('click', async () => {{
+  const username = document.getElementById('dl-user').value.trim();
+  const token    = document.getElementById('dl-token').value.trim();
+  if (!username || !token) {{ setDlStatus('Enter username and token.','err'); return; }}
+  if (document.getElementById('dl-remember').checked)
+    localStorage.setItem('m2m_creds', JSON.stringify({{user:username, token}}));
+  else localStorage.removeItem('m2m_creds');
+  const btn = document.getElementById('dl-go');
+  btn.disabled = true;
+  const setDlStatus = (msg, cls='') => {{
+    const el = document.getElementById('dl-status');
+    el.textContent = msg; el.className = cls;
+  }};
+  try {{
+    setDlStatus('Logging in…');
+    const apiKey = await m2mPost('login-token', {{username, token}});
+    try {{
+      setDlStatus('Fetching download options…');
+      const options = await m2mPost('download-options', {{datasetName:dlDs, entityIds:[dlEid]}}, apiKey);
+      const avail = (options||[]).filter(o=>o.available);
+      if (!avail.length) throw new Error('No downloadable products for this scene.');
+      const product = avail.find(o=>/bundle/i.test(o.productName)) || avail[0];
+      setDlStatus('Requesting download URL…');
+      const dlResult = await m2mPost('download-request', {{
+        downloads:[{{entityId:dlEid, productId:product.id}}], label:'declass_map'
+      }}, apiKey);
+      let url = dlResult?.availableDownloads?.[0]?.url;
+      if (!url && dlResult?.preparingDownloads?.length) {{
+        setDlStatus('Staging — polling…');
+        const deadline = Date.now() + 120_000;
+        while (Date.now() < deadline) {{
+          await new Promise(r => setTimeout(r, 5000));
+          setDlStatus(`Polling… (${{Math.round((deadline-Date.now())/1000)}}s left)`);
+          const ret = await m2mPost('download-retrieve', {{label:'declass_map'}}, apiKey);
+          url = ret?.available?.[0]?.url;
+          if (url) break;
+        }}
+      }}
+      if (!url) throw new Error('Timed out. Try again shortly.');
+      setDlStatus('Starting download…','ok');
+      const a = document.createElement('a');
+      a.href=url; a.download=''; a.target='_blank';
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setDlStatus(`✓ Download started — ${{product.productName}}`,'ok');
+    }} finally {{
+      try {{ await m2mPost('logout', {{}}, apiKey); }} catch(e) {{}}
+    }}
+  }} catch(err) {{
+    document.getElementById('dl-status').textContent = `Error: ${{err.message}}`;
+    document.getElementById('dl-status').className = 'err';
+    btn.disabled = false;
+  }}
+}});
+
+// ── USGS status check ─────────────────────────────────────────────────────────
+async function checkUsgsStatus() {{
+  const el = document.getElementById('usgs-status');
+  const label = document.getElementById('status-label');
+  el.className = 'checking'; label.textContent = 'USGS …';
+  try {{
+    const ctrl = new AbortController();
+    const tid  = setTimeout(() => ctrl.abort(), 8000);
+    await fetch('https://m2m.cr.usgs.gov/api/api/json/stable/', {{
+      method:'GET', signal:ctrl.signal, mode:'no-cors', cache:'no-store'
+    }});
+    clearTimeout(tid);
+    el.className = 'up'; label.textContent = 'USGS Online';
+    el.title = `USGS online as of ${{new Date().toLocaleTimeString()}}`;
+  }} catch(err) {{
+    el.className = 'down';
+    label.textContent = err.name === 'AbortError' ? 'USGS Timeout' : 'USGS Down';
+    el.title = `USGS unreachable at ${{new Date().toLocaleTimeString()}}`;
+  }}
+}}
+checkUsgsStatus();
+setInterval(checkUsgsStatus, 60_000);
 </script>
 </body>
 </html>"""
@@ -849,45 +1139,15 @@ def main():
     print(f"Year range: {geojson['metadata']['year_min']}–{geojson['metadata']['year_max']}")
     print(f"Satellite types: {sat_seen}")
 
-    # ── Write chunked GeoJSON (max ~60 MB each, GitHub Releases limit is 2 GB) ──
-    chunk_size  = 50_000  # features per chunk
-    features    = geojson["features"]
-    n_chunks    = max(1, math.ceil(len(features) / chunk_size))
-    chunk_files = []
-    chunk_urls  = []
-
-    # GitHub release tag and repo from env (set in workflow)
-    release_tag  = os.environ.get("RELEASE_TAG", "latest-data")
-    github_repo  = os.environ.get("GITHUB_REPOSITORY", "harryspacefromspace/declass-map")
-    base_url     = f"https://github.com/{github_repo}/releases/download/{release_tag}"
-
-    for i in range(n_chunks):
-        chunk_feats = features[i * chunk_size:(i + 1) * chunk_size]
-        fname = f"scenes_chunk_{i+1:02d}_of_{n_chunks:02d}.geojson"
-        chunk = {
-            "type": "FeatureCollection",
-            "features": chunk_feats,
-            "metadata": {**geojson["metadata"], "chunk": i + 1, "total_chunks": n_chunks},
-        }
-        with open(fname, "w") as f:
-            json.dump(chunk, f)
-        size_mb = os.path.getsize(fname) / 1e6
-        print(f"  Wrote {fname}  ({len(chunk_feats):,} features, {size_mb:.1f} MB)")
-        chunk_files.append(fname)
-        chunk_urls.append(f"{base_url}/{fname}")
-
-    print(f"Wrote {n_chunks} chunk file(s)")
-
-    # Also write a manifest so the workflow knows what to upload
-    with open("chunks_manifest.json", "w") as f:
-        json.dump({"tag": release_tag, "chunks": chunk_files, "urls": chunk_urls}, f, indent=2)
-    print("Saved chunks_manifest.json")
+    with open("available_scenes.geojson", "w") as f:
+        json.dump(geojson, f)
+    print("Saved available_scenes.geojson")
 
     with open("index.html", "w", encoding="utf-8") as f:
-        f.write(build_html(geojson, chunk_urls))
+        f.write(build_html(geojson))
     print("Saved index.html")
 
-    print(f"\nDone — {len(all_features):,} scenes mapped across {n_chunks} chunk(s).")
+    print(f"\nDone — {len(all_features):,} scenes mapped.")
 
 
 if __name__ == "__main__":
