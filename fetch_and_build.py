@@ -352,7 +352,7 @@ input[type=range]{{position:absolute;top:0;left:0;width:100%;height:100%;opacity
 
 /* ── Overlays button ── */
 #ov-toggle{{
-  position:absolute;top:12px;right:12px;z-index:1000;
+  position:absolute;bottom:50px;left:12px;z-index:1000;
   background:rgba(10,10,10,.85);backdrop-filter:blur(8px);
   border:1px solid #242424;color:#555;padding:6px 12px 6px 10px;
   border-radius:8px;font-size:11px;cursor:pointer;
@@ -363,9 +363,9 @@ input[type=range]{{position:absolute;top:0;left:0;width:100%;height:100%;opacity
 #ov-toggle svg{{flex-shrink:0;transition:transform .2s}}
 #ov-toggle.open svg{{transform:rotate(180deg)}}
 
-/* ── Overlays panel ── */
+/* ── Overlays panel (opens upward) ── */
 #ov-panel{{
-  position:absolute;top:50px;right:12px;z-index:999;
+  position:absolute;bottom:90px;left:12px;z-index:999;
   background:rgba(10,10,10,.92);backdrop-filter:blur(12px);
   border:1px solid #222;border-radius:10px;padding:14px;
   width:210px;display:none;flex-direction:column;gap:10px;
@@ -537,45 +537,47 @@ input[type=range]{{position:absolute;top:0;left:0;width:100%;height:100%;opacity
     <p>No scenes selected</p>
     <small>Choose a satellite type above to show footprints</small>
   </div>
-</div>
-<div id="counter">0 of {total:,} scenes</div>
 
-<!-- Overlays button -->
-<button id="ov-toggle">
-  <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-    <path d="M1 3h10M1 6h10M1 9h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-  </svg>
-  Overlays
-  <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-    <path d="M2 3.5L5 6.5L8 3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-  </svg>
-</button>
-<div id="ov-panel">
-  <div>
-    <div class="ov-section">✈ Air Power</div>
-    <button class="ov-btn" data-ov="airbases"><span class="ov-icon">✈</span>Military Airbases<span class="ov-badge" id="badge-airbases"></span></button>
-    <button class="ov-btn" data-ov="airfields"><span class="ov-icon">🛩</span>Airfields / Strips<span class="ov-badge" id="badge-airfields"></span></button>
+  <div id="counter">0 of {total:,} scenes</div>
+
+  <!-- Overlays button -->
+  <button id="ov-toggle">
+    <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+      <path d="M1 3h10M1 6h10M1 9h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+    </svg>
+    Overlays
+    <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+      <path d="M2 3.5L5 6.5L8 3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+    </svg>
+  </button>
+  <div id="ov-panel">
+    <div>
+      <div class="ov-section">✈ Air Power</div>
+      <button class="ov-btn" data-ov="airbases"><span class="ov-icon">✈</span>Military Airbases<span class="ov-badge" id="badge-airbases"></span></button>
+      <button class="ov-btn" data-ov="airfields"><span class="ov-icon">🛩</span>Airfields / Strips<span class="ov-badge" id="badge-airfields"></span></button>
+    </div>
+    <div>
+      <div class="ov-section">☢ Nuclear</div>
+      <button class="ov-btn" data-ov="silos"><span class="ov-icon">🚀</span>ICBM Missile Silos<span class="ov-badge" id="badge-silos"></span></button>
+      <button class="ov-btn" data-ov="nuclear"><span class="ov-icon">☢</span>Nuclear Sites<span class="ov-badge" id="badge-nuclear"></span></button>
+    </div>
+    <div>
+      <div class="ov-section">🛡 Ground Forces</div>
+      <button class="ov-btn" data-ov="bunkers"><span class="ov-icon">🏰</span>Bunkers / Fortifications<span class="ov-badge" id="badge-bunkers"></span></button>
+      <button class="ov-btn" data-ov="naval"><span class="ov-icon">⚓</span>Naval Bases<span class="ov-badge" id="badge-naval"></span></button>
+      <button class="ov-btn" data-ov="radar"><span class="ov-icon">📡</span>Radar / Early Warning<span class="ov-badge" id="badge-radar"></span></button>
+    </div>
   </div>
-  <div>
-    <div class="ov-section">☢ Nuclear</div>
-    <button class="ov-btn" data-ov="silos"><span class="ov-icon">🚀</span>ICBM Missile Silos<span class="ov-badge" id="badge-silos"></span></button>
-    <button class="ov-btn" data-ov="nuclear"><span class="ov-icon">☢</span>Nuclear Sites<span class="ov-badge" id="badge-nuclear"></span></button>
+
+  <!-- USGS status -->
+  <div id="usgs-status" class="checking" title="USGS EarthExplorer API — checks every 60s">
+    <span id="status-dot"></span>
+    <span id="status-label">USGS …</span>
   </div>
-  <div>
-    <div class="ov-section">🛡 Ground Forces</div>
-    <button class="ov-btn" data-ov="bunkers"><span class="ov-icon">🏰</span>Bunkers / Fortifications<span class="ov-badge" id="badge-bunkers"></span></button>
-    <button class="ov-btn" data-ov="naval"><span class="ov-icon">⚓</span>Naval Bases<span class="ov-badge" id="badge-naval"></span></button>
-    <button class="ov-btn" data-ov="radar"><span class="ov-icon">📡</span>Radar / Early Warning<span class="ov-badge" id="badge-radar"></span></button>
-  </div>
+
 </div>
 
-<!-- USGS status -->
-<div id="usgs-status" class="checking" title="USGS EarthExplorer API — checks every 60s">
-  <span id="status-dot"></span>
-  <span id="status-label">USGS …</span>
-</div>
-
-<!-- Download modal -->
+<!-- Download modal (outside map, fixed overlay) -->
 <div id="dl-modal">
   <div id="dl-box">
     <h4>Download Scene</h4>
@@ -899,13 +901,13 @@ document.getElementById('search').addEventListener('input', e => {{
 
 // ── Overlays ──────────────────────────────────────────────────────────────────
 const OV_QUERIES = {{
-  airbases: `[out:json][timeout:25];(node["military"="airfield"](__BBOX__);way["military"="airfield"](__BBOX__);node["aeroway"="aerodrome"]["military"](__BBOX__););out center;`,
-  airfields: `[out:json][timeout:25];(node["aeroway"="airstrip"](__BBOX__);node["aeroway"="airfield"](__BBOX__);way["aeroway"~"aerodrome|airstrip"](__BBOX__););out center;`,
-  silos:    `[out:json][timeout:25];(node["military"="missile_silo"](__BBOX__);node["military"~"silo|icbm|missile"](__BBOX__););out center;`,
-  nuclear:  `[out:json][timeout:25];(node["power"="plant"]["plant:source"="nuclear"](__BBOX__);way["power"="plant"]["plant:source"="nuclear"](__BBOX__);node["military"="nuclear_explosion_site"](__BBOX__););out center;`,
-  bunkers:  `[out:json][timeout:25];(node["military"~"bunker|fortification|stronghold|checkpoint"](__BBOX__);way["military"~"bunker|fortification"](__BBOX__););out center;`,
-  naval:    `[out:json][timeout:25];(node["military"="naval_base"](__BBOX__);way["military"="naval_base"](__BBOX__);node["harbour"="military"](__BBOX__););out center;`,
-  radar:    `[out:json][timeout:25];(node["military"~"radar|early_warning|range"](__BBOX__);node["man_made"="tower"]["military"](__BBOX__););out center;`,
+  airbases: `[out:json][timeout:25];(node["military"="aerodrome"](__BBOX__);way["military"="aerodrome"](__BBOX__);relation["military"="aerodrome"](__BBOX__););out center;`,
+  airfields: `[out:json][timeout:25];(node["aeroway"="aerodrome"]["military"](__BBOX__);way["aeroway"="aerodrome"]["military"](__BBOX__);node["aeroway"="airstrip"](__BBOX__);way["aeroway"="airstrip"](__BBOX__););out center;`,
+  silos:    `[out:json][timeout:25];(node["military"="missile_silo"](__BBOX__);way["military"="missile_silo"](__BBOX__););out center;`,
+  nuclear:  `[out:json][timeout:25];(node["power"="plant"]["plant:source"="nuclear"](__BBOX__);way["power"="plant"]["plant:source"="nuclear"](__BBOX__);relation["power"="plant"]["plant:source"="nuclear"](__BBOX__);node["military"="nuclear_explosion_site"](__BBOX__););out center;`,
+  bunkers:  `[out:json][timeout:25];(node["military"="bunker"](__BBOX__);way["military"="bunker"](__BBOX__);node["military"="fortification"](__BBOX__);way["military"="fortification"](__BBOX__););out center;`,
+  naval:    `[out:json][timeout:25];(node["military"="naval_base"](__BBOX__);way["military"="naval_base"](__BBOX__);relation["military"="naval_base"](__BBOX__););out center;`,
+  radar:    `[out:json][timeout:25];(node["military"="radar_station"](__BBOX__);way["military"="radar_station"](__BBOX__);node["military"="range"](__BBOX__);way["military"="range"](__BBOX__););out center;`,
 }};
 const OV_COLORS = {{
   airbases:'#4d9fff',airfields:'#4d9fff',silos:'#ff4d4d',
@@ -931,13 +933,26 @@ async function loadOverlay(key) {{
     return;
   }}
   btn && (btn.disabled = true);
+  // Use viewport bbox, but cap to reasonable area to avoid Overpass timeout
   const b = map.getBounds();
-  const bbox = `${{b.getSouth().toFixed(3)}},${{b.getWest().toFixed(3)}},${{b.getNorth().toFixed(3)}},${{b.getEast().toFixed(3)}}`;
+  const s = Math.max(b.getSouth(), -85), n = Math.min(b.getNorth(), 85);
+  const w = b.getWest(), e = b.getEast();
+  // If the view is very large (zoomed out), warn user to zoom in
+  const spanLat = n - s, spanLon = Math.min(e - w, 360);
+  if (spanLat > 60 || spanLon > 90) {{
+    if (!confirm('Zoom in closer before loading overlays, or click OK to try anyway (may be slow or return no results).')) {{
+      btn && (btn.disabled = false);
+      return;
+    }}
+  }}
+  const bbox = `${{s.toFixed(3)}},${{w.toFixed(3)}},${{n.toFixed(3)}},${{e.toFixed(3)}}`;
   const q = OV_QUERIES[key].replace(/__BBOX__/g, bbox);
   try {{
     if (!ovCache[key]) {{
       const resp = await fetch('https://overpass-api.de/api/interpreter', {{
-        method:'POST', body:'data='+encodeURIComponent(q)
+        method:'POST',
+        headers:{{'Content-Type':'application/x-www-form-urlencoded'}},
+        body:'data='+encodeURIComponent(q)
       }});
       if (!resp.ok) throw new Error(`Overpass HTTP ${{resp.status}}`);
       ovCache[key] = await resp.json();
@@ -958,7 +973,16 @@ async function loadOverlay(key) {{
     const badge = document.getElementById(`badge-${{key}}`);
     if (badge) badge.textContent = points.length || '';
     updateOvToggle();
-  }} catch(e) {{ console.warn('Overlay error:', e); }}
+  }} catch(e) {{
+    console.warn('Overlay error:', e);
+    if (btn) {{
+      btn.disabled = false;
+      btn.style.color = '#cc4444';
+      btn.title = 'Failed: ' + e.message;
+      setTimeout(() => {{ btn.style.color = ''; btn.title = ''; }}, 4000);
+    }}
+    return;
+  }}
   btn && (btn.disabled = false);
 }}
 
