@@ -266,7 +266,7 @@ def build_html(geojson):
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
 *{{margin:0;padding:0;box-sizing:border-box}}
-body{{background:#0a0a0a;color:#e0e0e0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;height:100vh;display:flex;flex-direction:column;overflow:hidden}}
+html{{height:100%}}body{{background:#0a0a0a;color:#e0e0e0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;height:100%;display:flex;flex-direction:column;overflow:hidden;margin:0}}
 
 /* ── Header ── */
 #header{{
@@ -615,6 +615,8 @@ function setBasemap(key) {{
   document.querySelectorAll('.bm-btn').forEach(b => b.classList.toggle('on', b.dataset.bm===key));
 }}
 setBasemap('dark');
+// Ensure Leaflet knows the correct map size after initial render
+setTimeout(() => map.invalidateSize(), 100);
 
 // ── Filter state ──────────────────────────────────────────────────────────────
 const satActive = {{}};
@@ -1038,7 +1040,7 @@ async function toggleOverlay(key) {{
     return;
   }}
 
-  if (btn) {{ btn.disabled = true; btn.textContent = btn.textContent.replace('…','') + ' …'; }}
+  if (btn) {{ btn.disabled = true; btn.style.opacity = '0.5'; }}
 
   try {{
     let points = [];
@@ -1089,17 +1091,10 @@ async function toggleOverlay(key) {{
 
   if (btn) {{
     btn.disabled = false;
-    // Restore label
-    btn.innerHTML = btn.dataset.ov === 'silos'
-      ? '<span class="ov-icon">🚀</span>ICBM / Missile Sites<span class="ov-badge" id="badge-silos"></span>'
-      : '<span class="ov-icon">✈</span>Military Airbases<span class="ov-badge" id="badge-airbases"></span>';
-    const badge = document.getElementById(`badge-${{key}}`);
-    if (badge && ovLayers[key]) badge.textContent = (key==='silos'?CW_SILOS:ovLayers[key]?.[0]?.getLayers?.()?.length||0);
-    // Re-read from layer
+    btn.style.opacity = '';
     if (ovLayers[key]) {{
-      const cnt = ovLayers[key].getLayers().length;
-      const b2 = document.getElementById(`badge-${{key}}`);
-      if (b2) b2.textContent = cnt;
+      const badge = document.getElementById(`badge-${{key}}`);
+      if (badge) badge.textContent = ovLayers[key].getLayers().length;
     }}
   }}
 }}
