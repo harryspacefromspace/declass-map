@@ -551,22 +551,8 @@ input[type=range]{{position:absolute;top:0;left:0;width:100%;height:100%;opacity
     </svg>
   </button>
   <div id="ov-panel">
-    <div>
-      <div class="ov-section">✈ Air Power</div>
-      <button class="ov-btn" data-ov="airbases"><span class="ov-icon">✈</span>Military Airbases<span class="ov-badge" id="badge-airbases"></span></button>
-      <button class="ov-btn" data-ov="airfields"><span class="ov-icon">🛩</span>Airfields / Strips<span class="ov-badge" id="badge-airfields"></span></button>
-    </div>
-    <div>
-      <div class="ov-section">☢ Nuclear</div>
-      <button class="ov-btn" data-ov="silos"><span class="ov-icon">🚀</span>ICBM Missile Silos<span class="ov-badge" id="badge-silos"></span></button>
-      <button class="ov-btn" data-ov="nuclear"><span class="ov-icon">☢</span>Nuclear Sites<span class="ov-badge" id="badge-nuclear"></span></button>
-    </div>
-    <div>
-      <div class="ov-section">🛡 Ground Forces</div>
-      <button class="ov-btn" data-ov="bunkers"><span class="ov-icon">🏰</span>Bunkers / Fortifications<span class="ov-badge" id="badge-bunkers"></span></button>
-      <button class="ov-btn" data-ov="naval"><span class="ov-icon">⚓</span>Naval Bases<span class="ov-badge" id="badge-naval"></span></button>
-      <button class="ov-btn" data-ov="radar"><span class="ov-icon">📡</span>Radar / Early Warning<span class="ov-badge" id="badge-radar"></span></button>
-    </div>
+    <button class="ov-btn" data-ov="airbases"><span class="ov-icon">✈</span>Military Airbases<span class="ov-badge" id="badge-airbases"></span></button>
+    <button class="ov-btn" data-ov="silos"><span class="ov-icon">🚀</span>ICBM / Missile Sites<span class="ov-badge" id="badge-silos"></span></button>
   </div>
 
   <!-- USGS status -->
@@ -900,95 +886,227 @@ document.getElementById('search').addEventListener('input', e => {{
 }});
 
 // ── Overlays ──────────────────────────────────────────────────────────────────
-const OV_QUERIES = {{
-  airbases: `[out:json][timeout:25];(node["military"="aerodrome"](__BBOX__);way["military"="aerodrome"](__BBOX__);relation["military"="aerodrome"](__BBOX__););out center;`,
-  airfields: `[out:json][timeout:25];(node["aeroway"="aerodrome"]["military"](__BBOX__);way["aeroway"="aerodrome"]["military"](__BBOX__);node["aeroway"="airstrip"](__BBOX__);way["aeroway"="airstrip"](__BBOX__););out center;`,
-  silos:    `[out:json][timeout:25];(node["military"="missile_silo"](__BBOX__);way["military"="missile_silo"](__BBOX__););out center;`,
-  nuclear:  `[out:json][timeout:25];(node["power"="plant"]["plant:source"="nuclear"](__BBOX__);way["power"="plant"]["plant:source"="nuclear"](__BBOX__);relation["power"="plant"]["plant:source"="nuclear"](__BBOX__);node["military"="nuclear_explosion_site"](__BBOX__););out center;`,
-  bunkers:  `[out:json][timeout:25];(node["military"="bunker"](__BBOX__);way["military"="bunker"](__BBOX__);node["military"="fortification"](__BBOX__);way["military"="fortification"](__BBOX__););out center;`,
-  naval:    `[out:json][timeout:25];(node["military"="naval_base"](__BBOX__);way["military"="naval_base"](__BBOX__);relation["military"="naval_base"](__BBOX__););out center;`,
-  radar:    `[out:json][timeout:25];(node["military"="radar_station"](__BBOX__);way["military"="radar_station"](__BBOX__);node["military"="range"](__BBOX__);way["military"="range"](__BBOX__););out center;`,
-}};
-const OV_COLORS = {{
-  airbases:'#4d9fff',airfields:'#4d9fff',silos:'#ff4d4d',
-  nuclear:'#ff9933',bunkers:'#888',naval:'#4dffff',radar:'#cc44ff'
-}};
+// Hardcoded Cold War sites (instant, no API needed)
+const CW_SILOS = [
+  // United States ICBM fields
+  {{n:"Minot AFB (Minuteman III)",         lat:48.4156, lon:-101.3580, k:"silos"}},
+  {{n:"Malmstrom AFB (Minuteman III)",      lat:47.5077, lon:-111.1838, k:"silos"}},
+  {{n:"F.E. Warren AFB (Minuteman III)",    lat:41.1450, lon:-104.8692, k:"silos"}},
+  {{n:"Grand Forks AFB silo field",         lat:47.9611, lon:-97.4011,  k:"silos"}},
+  {{n:"Ellsworth AFB (Minuteman II)",       lat:44.1451, lon:-103.1035, k:"silos"}},
+  {{n:"Whiteman AFB (Minuteman II)",        lat:38.7279, lon:-93.5479,  k:"silos"}},
+  {{n:"McConnell AFB (Titan II)",           lat:37.6218, lon:-97.2682,  k:"silos"}},
+  {{n:"Davis-Monthan AFB (Titan II)",       lat:32.1665, lon:-110.8831, k:"silos"}},
+  {{n:"Little Rock AFB (Titan II)",         lat:34.9169, lon:-92.1498,  k:"silos"}},
+  {{n:"Vandenberg SFB (test silos)",        lat:34.7420, lon:-120.5724, k:"silos"}},
+  {{n:"Atlas F Silo — Wichita KS",          lat:37.5420, lon:-97.6350,  k:"silos"}},
+  {{n:"Atlas E Silo — Fairchild AFB",       lat:47.6151, lon:-117.9559, k:"silos"}},
+  {{n:"Titan I Complex — Lowry AFB",        lat:39.7220, lon:-104.5950, k:"silos"}},
+  {{n:"Peacekeeper silo — Warren",          lat:41.1500, lon:-104.8200, k:"silos"}},
+  // Soviet / Russian ICBM fields
+  {{n:"Plesetsk Cosmodrome (ICBM test)",    lat:62.9271, lon:40.5777,   k:"silos"}},
+  {{n:"Dombarovsky ICBM field",             lat:50.7936, lon:59.8586,   k:"silos"}},
+  {{n:"Kozelsk ICBM field (SS-19)",         lat:54.0363, lon:35.7847,   k:"silos"}},
+  {{n:"Tatishchevo ICBM field (SS-19)",     lat:51.6736, lon:45.9730,   k:"silos"}},
+  {{n:"Uzhur ICBM field (SS-18 Satan)",     lat:55.3000, lon:89.8167,   k:"silos"}},
+  {{n:"Pervomaysk SS-24 silos (Ukraine)",   lat:48.0450, lon:30.8550,   k:"silos"}},
+  {{n:"Derazhnya SS-19 silos (Ukraine)",    lat:49.2614, lon:27.3972,   k:"silos"}},
+  {{n:"Kartaly ICBM field",                 lat:53.0667, lon:60.6833,   k:"silos"}},
+  {{n:"Bershet ICBM field (Perm)",          lat:57.9500, lon:55.9500,   k:"silos"}},
+  {{n:"Aleysk ICBM field (Siberia)",        lat:52.5000, lon:82.8000,   k:"silos"}},
+  {{n:"Zhangiz-Tobe (Kazakhstan)",          lat:49.8000, lon:82.2000,   k:"silos"}},
+  {{n:"Plokštinė R-12 MRBM (Lithuania)",   lat:55.8506, lon:22.0428,   k:"silos"}},
+  {{n:"Gyrovoye SS-20 depot (Russia)",      lat:55.1500, lon:37.5000,   k:"silos"}},
+  // China
+  {{n:"DF-5 Silo Field — Luoning",          lat:34.3900, lon:111.6700,  k:"silos"}},
+  {{n:"DF-41 Silo Field — Yumen",           lat:40.2800, lon:97.0500,   k:"silos"}},
+  {{n:"DF-41 Silo Field — Hami",            lat:42.8000, lon:93.5000,   k:"silos"}},
+  // France
+  {{n:"Plateau d'Albion S-3 IRBM field",   lat:44.1167, lon:5.6167,    k:"silos"}},
+];
+
+const CW_AIRBASES = [
+  // USA Cold War strategic airbases
+  {{n:"Thule Air Base (Greenland)",         lat:76.5311, lon:-68.7032,  k:"airbases"}},
+  {{n:"Eielson AFB (Alaska)",               lat:64.6654, lon:-147.1021, k:"airbases"}},
+  {{n:"Elmendorf AFB (Alaska)",             lat:61.2507, lon:-149.8066, k:"airbases"}},
+  {{n:"Loring AFB (Maine)",                 lat:46.9496, lon:-67.8879,  k:"airbases"}},
+  {{n:"Plattsburgh AFB (New York)",         lat:44.6509, lon:-73.4682,  k:"airbases"}},
+  {{n:"Griffiss AFB (New York)",            lat:43.2338, lon:-75.4068,  k:"airbases"}},
+  {{n:"Westover AFB (Massachusetts)",       lat:42.1963, lon:-72.5348,  k:"airbases"}},
+  {{n:"Barksdale AFB (Louisiana)",          lat:32.5018, lon:-93.6627,  k:"airbases"}},
+  {{n:"Dyess AFB (Texas)",                  lat:32.4208, lon:-99.8543,  k:"airbases"}},
+  {{n:"Ellsworth AFB (South Dakota)",       lat:44.1451, lon:-103.1035, k:"airbases"}},
+  {{n:"Offutt AFB — SAC HQ (Nebraska)",     lat:41.1182, lon:-95.9124,  k:"airbases"}},
+  {{n:"Minot AFB (North Dakota)",           lat:48.4156, lon:-101.3580, k:"airbases"}},
+  {{n:"Malmstrom AFB (Montana)",            lat:47.5077, lon:-111.1838, k:"airbases"}},
+  {{n:"March AFB (California)",             lat:33.8808, lon:-117.2590, k:"airbases"}},
+  {{n:"Castle AFB (California)",            lat:37.3808, lon:-120.5680, k:"airbases"}},
+  {{n:"Fairchild AFB (Washington)",         lat:47.6151, lon:-117.6559, k:"airbases"}},
+  {{n:"Grand Forks AFB (North Dakota)",     lat:47.9611, lon:-97.4011,  k:"airbases"}},
+  {{n:"Seymour Johnson AFB (NC)",           lat:35.3394, lon:-77.9606,  k:"airbases"}},
+  {{n:"Sawyer AFB (Michigan)",              lat:46.3528, lon:-87.3952,  k:"airbases"}},
+  // NATO Europe forward bases
+  {{n:"RAF Lakenheath (UK)",                lat:52.4093, lon:0.5610,    k:"airbases"}},
+  {{n:"RAF Mildenhall (UK)",                lat:52.3619, lon:0.4864,    k:"airbases"}},
+  {{n:"RAF Upper Heyford (UK)",             lat:51.9333, lon:-1.2333,   k:"airbases"}},
+  {{n:"RAF Greenham Common (UK)",           lat:51.3667, lon:-1.3000,   k:"airbases"}},
+  {{n:"Ramstein AB (West Germany)",         lat:49.4369, lon:7.6003,    k:"airbases"}},
+  {{n:"Spangdahlem AB (West Germany)",      lat:49.9726, lon:6.6925,    k:"airbases"}},
+  {{n:"Bitburg AB (West Germany)",          lat:49.9455, lon:6.5648,    k:"airbases"}},
+  {{n:"Hahn AB (West Germany)",             lat:50.0133, lon:7.2686,    k:"airbases"}},
+  {{n:"Zweibrücken AB (West Germany)",      lat:49.2094, lon:7.4003,    k:"airbases"}},
+  {{n:"Soesterberg AB (Netherlands)",       lat:52.1277, lon:5.2761,    k:"airbases"}},
+  {{n:"Volkel AB (Netherlands)",            lat:51.6564, lon:5.7073,    k:"airbases"}},
+  {{n:"Kleine Brogel AB (Belgium)",         lat:51.1683, lon:5.4700,    k:"airbases"}},
+  {{n:"Aviano AB (Italy)",                  lat:46.0319, lon:12.5966,   k:"airbases"}},
+  {{n:"Incirlik AB (Turkey)",               lat:37.0021, lon:35.4258,   k:"airbases"}},
+  {{n:"Torrejon AB (Spain)",                lat:40.4967, lon:-3.4456,   k:"airbases"}},
+  {{n:"Morón AB (Spain)",                   lat:37.1749, lon:-5.6149,   k:"airbases"}},
+  {{n:"Keflavík NAS (Iceland)",             lat:63.9850, lon:-22.6056,  k:"airbases"}},
+  {{n:"Andøya Air Base (Norway)",           lat:69.2925, lon:16.1444,   k:"airbases"}},
+  {{n:"Bodø Main Air Station (Norway)",     lat:67.2692, lon:14.3653,   k:"airbases"}},
+  // Soviet / Warsaw Pact strategic airbases
+  {{n:"Kubinka AB (Soviet bombers)",        lat:55.6113, lon:36.6597,   k:"airbases"}},
+  {{n:"Engel's AB (Tu-95 Bears)",           lat:51.4629, lon:46.1771,   k:"airbases"}},
+  {{n:"Ryazan Dyagilevo (Tu-22)",           lat:54.6147, lon:39.5714,   k:"airbases"}},
+  {{n:"Mochische AB (Tu-95)",               lat:54.8400, lon:82.9400,   k:"airbases"}},
+  {{n:"Dolon AB (Tu-95 Bears)",             lat:49.9467, lon:76.0300,   k:"airbases"}},
+  {{n:"Ukrainka AB (Tu-95/160 Bears)",      lat:51.1694, lon:128.4469,  k:"airbases"}},
+  {{n:"Soltsy-2 AB (Tu-16 Badgers)",        lat:58.1400, lon:30.3000,   k:"airbases"}},
+  {{n:"Zhukovka AB (Blackjacks)",           lat:53.5700, lon:33.7500,   k:"airbases"}},
+  {{n:"Mirgorod AB (Ukraine)",              lat:49.9553, lon:33.6136,   k:"airbases"}},
+  {{n:"Bykhov AB (Belarus)",                lat:53.5167, lon:30.2333,   k:"airbases"}},
+  {{n:"Templin AB (East Germany)",          lat:53.1167, lon:13.5000,   k:"airbases"}},
+  {{n:"Wittstock AB (East Germany)",        lat:53.2167, lon:12.5000,   k:"airbases"}},
+  {{n:"Welzow AB (East Germany)",           lat:51.5833, lon:14.1333,   k:"airbases"}},
+  {{n:"Legnica AB (Poland)",                lat:51.2000, lon:16.2000,   k:"airbases"}},
+  {{n:"Lask AB (Poland)",                   lat:51.5517, lon:19.1808,   k:"airbases"}},
+];
+
+// OurAirports CSV URL — fetched once, parsed client-side, filtered to military
+const OURAIRPORTS_URL = 'https://davidmegginson.github.io/ourairports-data/airports.csv';
+
 const ovLayers = {{}};
-const ovCache  = {{}};
+let ourairportsCache = null;
 
 function ovMarker(lat, lon, name, key) {{
-  const c = OV_COLORS[key] || '#fff';
+  const colors = {{silos:'#ff4d4d', airbases:'#4d9fff'}};
+  const c = colors[key] || '#aaa';
   return L.circleMarker([lat, lon], {{
-    radius:5, color:c, fillColor:c, fillOpacity:.7, weight:1.5, opacity:.9
-  }}).bindPopup(`<div style="font-size:11px;color:#ccc;background:#141414;padding:6px 10px;border-radius:6px">${{name||'Unknown'}}</div>`,
-    {{className:'ov-popup', closeButton:false}});
+    radius:5, color:c, fillColor:c, fillOpacity:.75, weight:1.5, opacity:.9
+  }}).bindPopup(
+    `<div style="font-size:11px;color:#ccc;background:#141414;padding:6px 10px;border-radius:6px;max-width:200px">${{name}}</div>`,
+    {{className:'ov-popup', closeButton:false}}
+  );
 }}
 
-async function loadOverlay(key) {{
+// Parse the OurAirports CSV (only grab the columns we need)
+function parseOurAirportsCSV(text) {{
+  const lines = text.split('\n');
+  const header = lines[0].split(',').map(h => h.replace(/"/g,'').trim());
+  const iName = header.indexOf('name');
+  const iLat  = header.indexOf('latitude_deg');
+  const iLon  = header.indexOf('longitude_deg');
+  const iType = header.indexOf('type');
+  const results = [];
+  for (let i = 1; i < lines.length; i++) {{
+    // Simple CSV parse — handles quoted fields
+    const row = lines[i].match(/(".*?"|[^,]+|(?<=,)(?=,)|(?<=,)$|^(?=,))/g);
+    if (!row) continue;
+    const clean = row.map(v => v.replace(/^"|"$/g,'').trim());
+    if (clean[iType] === 'military' && clean[iLat] && clean[iLon]) {{
+      const lat = parseFloat(clean[iLat]);
+      const lon = parseFloat(clean[iLon]);
+      if (!isNaN(lat) && !isNaN(lon)) {{
+        results.push({{n: clean[iName] || 'Military Airport', lat, lon, k:'airbases'}});
+      }}
+    }}
+  }}
+  return results;
+}}
+
+async function toggleOverlay(key) {{
   const btn = document.querySelector(`.ov-btn[data-ov="${{key}}"]`);
+
+  // Toggle off if already showing
   if (ovLayers[key]) {{
-    map.removeLayer(ovLayers[key]); delete ovLayers[key];
+    map.removeLayer(ovLayers[key]);
+    delete ovLayers[key];
     btn?.classList.remove('on');
     updateOvToggle();
     return;
   }}
-  btn && (btn.disabled = true);
-  // Use viewport bbox, but cap to reasonable area to avoid Overpass timeout
-  const b = map.getBounds();
-  const s = Math.max(b.getSouth(), -85), n = Math.min(b.getNorth(), 85);
-  const w = b.getWest(), e = b.getEast();
-  // If the view is very large (zoomed out), warn user to zoom in
-  const spanLat = n - s, spanLon = Math.min(e - w, 360);
-  if (spanLat > 60 || spanLon > 90) {{
-    if (!confirm('Zoom in closer before loading overlays, or click OK to try anyway (may be slow or return no results).')) {{
-      btn && (btn.disabled = false);
-      return;
-    }}
-  }}
-  const bbox = `${{s.toFixed(3)}},${{w.toFixed(3)}},${{n.toFixed(3)}},${{e.toFixed(3)}}`;
-  const q = OV_QUERIES[key].replace(/__BBOX__/g, bbox);
+
+  if (btn) {{ btn.disabled = true; btn.textContent = btn.textContent.replace('…','') + ' …'; }}
+
   try {{
-    if (!ovCache[key]) {{
-      const resp = await fetch('https://overpass-api.de/api/interpreter', {{
-        method:'POST',
-        headers:{{'Content-Type':'application/x-www-form-urlencoded'}},
-        body:'data='+encodeURIComponent(q)
-      }});
-      if (!resp.ok) throw new Error(`Overpass HTTP ${{resp.status}}`);
-      ovCache[key] = await resp.json();
+    let points = [];
+
+    if (key === 'silos') {{
+      points = CW_SILOS;
+
+    }} else if (key === 'airbases') {{
+      // Start with hardcoded Cold War bases immediately
+      points = [...CW_AIRBASES];
+
+      // Then fetch OurAirports for comprehensive global military airports
+      if (!ourairportsCache) {{
+        try {{
+          const resp = await fetch(OURAIRPORTS_URL);
+          if (resp.ok) {{
+            const text = await resp.text();
+            ourairportsCache = parseOurAirportsCSV(text);
+          }}
+        }} catch(e) {{
+          console.warn('OurAirports fetch failed, using hardcoded only:', e);
+        }}
+      }}
+      if (ourairportsCache) {{
+        // Merge: deduplicate by proximity (skip if within 5km of a hardcoded site)
+        const merged = [...CW_AIRBASES];
+        for (const ap of ourairportsCache) {{
+          const tooClose = CW_AIRBASES.some(cw =>
+            Math.abs(cw.lat - ap.lat) < 0.05 && Math.abs(cw.lon - ap.lon) < 0.05
+          );
+          if (!tooClose) merged.push(ap);
+        }}
+        points = merged;
+      }}
     }}
-    const elements = ovCache[key].elements || [];
-    // nodes have lat/lon directly; ways/relations have center.lat/center.lon
-    const points = elements.map(el => {{
-      const lat = el.lat ?? el.center?.lat;
-      const lon = el.lon ?? el.center?.lon;
-      return (lat && lon) ? {{ lat, lon, name: el.tags?.name || el.tags?.operator || '' }} : null;
-    }}).filter(Boolean);
-    const layer = L.layerGroup(
-      points.map(p => ovMarker(p.lat, p.lon, p.name, key))
-    );
+
+    const layer = L.layerGroup(points.map(p => ovMarker(p.lat, p.lon, p.n, key)));
     layer.addTo(map);
     ovLayers[key] = layer;
     btn?.classList.add('on');
     const badge = document.getElementById(`badge-${{key}}`);
-    if (badge) badge.textContent = points.length || '';
+    if (badge) badge.textContent = points.length;
     updateOvToggle();
+
   }} catch(e) {{
-    console.warn('Overlay error:', e);
-    if (btn) {{
-      btn.disabled = false;
-      btn.style.color = '#cc4444';
-      btn.title = 'Failed: ' + e.message;
-      setTimeout(() => {{ btn.style.color = ''; btn.title = ''; }}, 4000);
-    }}
-    return;
+    console.error('Overlay error:', e);
   }}
-  btn && (btn.disabled = false);
+
+  if (btn) {{
+    btn.disabled = false;
+    // Restore label
+    btn.innerHTML = btn.dataset.ov === 'silos'
+      ? '<span class="ov-icon">🚀</span>ICBM / Missile Sites<span class="ov-badge" id="badge-silos"></span>'
+      : '<span class="ov-icon">✈</span>Military Airbases<span class="ov-badge" id="badge-airbases"></span>';
+    const badge = document.getElementById(`badge-${{key}}`);
+    if (badge && ovLayers[key]) badge.textContent = (key==='silos'?CW_SILOS:ovLayers[key]?.[0]?.getLayers?.()?.length||0);
+    // Re-read from layer
+    if (ovLayers[key]) {{
+      const cnt = ovLayers[key].getLayers().length;
+      const b2 = document.getElementById(`badge-${{key}}`);
+      if (b2) b2.textContent = cnt;
+    }}
+  }}
 }}
 
 function updateOvToggle() {{
   const tog = document.getElementById('ov-toggle');
-  tog.classList.toggle('has-active', Object.keys(ovLayers).length > 0);
+  if (tog) tog.classList.toggle('has-active', Object.keys(ovLayers).length > 0);
 }}
 
 document.getElementById('ov-toggle').addEventListener('click', () => {{
@@ -998,7 +1116,7 @@ document.getElementById('ov-toggle').addEventListener('click', () => {{
   tog.classList.toggle('open');
 }});
 document.querySelectorAll('.ov-btn').forEach(btn =>
-  btn.addEventListener('click', () => loadOverlay(btn.dataset.ov))
+  btn.addEventListener('click', () => toggleOverlay(btn.dataset.ov))
 );
 
 // ── M2M Download ──────────────────────────────────────────────────────────────
