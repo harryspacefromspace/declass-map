@@ -316,7 +316,7 @@ html{{height:100%}}body{{background:#0a0a0a;color:#e0e0e0;font-family:-apple-sys
 #slider-track{{position:absolute;top:50%;left:0;right:0;height:2px;background:#1e1e1e;transform:translateY(-50%);border-radius:2px}}
 #slider-fill{{position:absolute;top:50%;height:2px;background:#2e2e2e;transform:translateY(-50%);border-radius:2px;transition:background .2s}}
 #slider-fill.active{{background:#484848}}
-input[type=range]{{position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;cursor:pointer;pointer-events:auto;margin:0;z-index:2}}input[type=range]::-webkit-slider-thumb{{pointer-events:auto}}input[type=range].on-top{{z-index:3}}
+input[type=range]{{position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;cursor:pointer;pointer-events:auto;margin:0;z-index:2}}input[type=range]::-webkit-slider-thumb{{pointer-events:auto}}
 .thumb{{position:absolute;top:50%;width:10px;height:10px;background:#383838;border-radius:50%;transform:translate(-50%,-50%);pointer-events:none;border:1px solid #555;transition:background .15s}}
 .thumb.active{{background:#777}}
 
@@ -827,14 +827,11 @@ function updateSlider() {{
   thumbHi.classList.toggle('active',active);
 }}
 function updateZIndex() {{
-  // Give higher z-index to whichever thumb is at/near the max end
-  // so the lo thumb is always reachable on the left
   const lo=parseInt(rangeLo.value), hi=parseInt(rangeHi.value);
-  const range=YEAR_MAX-YEAR_MIN;
-  const loFrac=(lo-YEAR_MIN)/range, hiFrac=(hi-YEAR_MIN)/range;
-  // If hi thumb is near the left side, it would cover lo — give lo priority
-  rangeLo.classList.toggle('on-top', loFrac >= hiFrac - 0.01);
-  rangeHi.classList.toggle('on-top', hiFrac > loFrac + 0.01);
+  // hi thumb gets on-top only when strictly to the right of lo
+  // When equal, lo gets priority so user can always drag it left to separate them
+  rangeLo.style.zIndex = (lo >= hi) ? 3 : 2;
+  rangeHi.style.zIndex = (hi > lo)  ? 3 : 2;
 }}
 rangeLo.addEventListener('input',()=>{{
   if(parseInt(rangeLo.value)>parseInt(rangeHi.value)) rangeLo.value=rangeHi.value;
