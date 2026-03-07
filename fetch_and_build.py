@@ -1005,7 +1005,7 @@ function ovMarker(lat, lon, name, key) {{
 
 // Parse the OurAirports CSV (only grab the columns we need)
 function parseOurAirportsCSV(text) {{
-  const lines = text.split('\n');
+  const lines = text.split('\\n');
   const header = lines[0].split(',').map(h => h.replace(/"/g,'').trim());
   const iName = header.indexOf('name');
   const iLat  = header.indexOf('latitude_deg');
