@@ -721,6 +721,11 @@ function polyArea(geom) {{
 }}
 
 const popup = L.popup({{maxWidth:290, autoPan:true, closeButton:true}});
+// Stop all clicks inside the popup from bubbling to the map
+popup.on('add', () => {{
+  const el = popup.getElement();
+  if (el) L.DomEvent.disableClickPropagation(el);
+}});
 let puFeats=[], puIdx=0, highlightLayer=null;
 
 function highlightFootprint(feat) {{
@@ -766,8 +771,8 @@ function renderPopup() {{
   setTimeout(() => {{
     const prev = document.getElementById('pu-prev');
     const next = document.getElementById('pu-next');
-    if (prev) prev.addEventListener('click', ()=>{{ puIdx--; renderPopup(); }});
-    if (next) next.addEventListener('click', ()=>{{ puIdx++; renderPopup(); }});
+    if (prev) prev.addEventListener('click', e=>{{ e.stopPropagation(); e.preventDefault(); puIdx--; renderPopup(); }});
+    if (next) next.addEventListener('click', e=>{{ e.stopPropagation(); e.preventDefault(); puIdx++; renderPopup(); }});
     const dlBtn = popup.getElement()?.querySelector('.pu-dl-btn');
     if (dlBtn) dlBtn.addEventListener('click', e => {{
       e.stopPropagation();
