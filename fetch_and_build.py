@@ -312,13 +312,12 @@ html{{height:100%}}body{{background:#0a0a0a;color:#e0e0e0;font-family:-apple-sys
 
 /* Year slider */
 .yr-val{{font-size:11px;color:#555;min-width:32px;text-align:center;font-variant-numeric:tabular-nums}}
-.slider-wrap{{position:relative;width:140px;height:20px;flex-shrink:0}}
-#slider-track{{position:absolute;top:50%;left:0;right:0;height:2px;background:#1e1e1e;transform:translateY(-50%);border-radius:2px}}
-#slider-fill{{position:absolute;top:50%;height:2px;background:#2e2e2e;transform:translateY(-50%);border-radius:2px;transition:background .2s}}
+.slider-wrap{{position:relative;width:140px;height:20px;flex-shrink:0;cursor:pointer;user-select:none}}
+#slider-track{{position:absolute;top:50%;left:0;right:0;height:2px;background:#1e1e1e;transform:translateY(-50%);border-radius:2px;pointer-events:none}}
+#slider-fill{{position:absolute;top:50%;height:2px;background:#2e2e2e;transform:translateY(-50%);border-radius:2px;transition:background .2s;pointer-events:none}}
 #slider-fill.active{{background:#484848}}
-input[type=range]{{position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;cursor:pointer;pointer-events:auto;margin:0;z-index:2}}input[type=range]::-webkit-slider-thumb{{pointer-events:auto}}
 .thumb{{position:absolute;top:50%;width:10px;height:10px;background:#383838;border-radius:50%;transform:translate(-50%,-50%);pointer-events:none;border:1px solid #555;transition:background .15s}}
-.thumb.active{{background:#777}}
+.thumb.dragging{{background:#777}}
 
 /* Basemap + reset */
 .bm-btn{{background:transparent;border:1px solid #1e1e1e;color:#383838;padding:3px 8px;border-radius:4px;cursor:pointer;font-size:10px;transition:all .12s;flex-shrink:0}}
@@ -508,11 +507,9 @@ input[type=range]{{position:absolute;top:0;left:0;width:100%;height:100%;opacity
   <div class="filter-section">
     <span class="filter-label">Years</span>
     <span class="yr-val" id="yr-lo">{year_min}</span>
-    <div class="slider-wrap">
+    <div class="slider-wrap" id="slider-wrap">
       <div id="slider-track"></div>
       <div id="slider-fill"></div>
-      <input type="range" id="range-lo" min="{year_min}" max="{year_max}" value="{year_min}" step="1">
-      <input type="range" id="range-hi" min="{year_min}" max="{year_max}" value="{year_max}" step="1">
       <div class="thumb" id="thumb-lo"></div>
       <div class="thumb" id="thumb-hi"></div>
     </div>
@@ -810,46 +807,76 @@ document.getElementById('sat-none').addEventListener('click', () => {{
 }});
 
 // ── Year slider ───────────────────────────────────────────────────────────────
-const rangeLo=document.getElementById('range-lo'), rangeHi=document.getElementById('range-hi');
-const thumbLo=document.getElementById('thumb-lo'), thumbHi=document.getElementById('thumb-hi');
-const fill=document.getElementById('slider-fill');
+// ── Year slider (custom — no native inputs) ────────────────────────────────
+const sliderWrap = document.getElementById('slider-wrap');
+const thumbLo = document.getElementById('thumb-lo');
+const thumbHi = document.getElementById('thumb-hi');
+const fill    = document.getElementById('slider-fill');
+
+function sliderPct(v) {{ return (v - YEAR_MIN) / (YEAR_MAX - YEAR_MIN) * 100; }}
+function sliderVal(p) {{ return Math.round(YEAR_MIN + p * (YEAR_MAX - YEAR_MIN)); }}
+function sliderClamp(v, a, b) {{ return Math.max(a, Math.min(b, v)); }}
 
 function updateSlider() {{
-  const lo=parseInt(rangeLo.value), hi=parseInt(rangeHi.value);
-  const pct=v=>(v-YEAR_MIN)/(YEAR_MAX-YEAR_MIN)*100;
-  fill.style.left=pct(lo)+'%'; fill.style.width=(pct(hi)-pct(lo))+'%';
-  thumbLo.style.left=pct(lo)+'%'; thumbHi.style.left=pct(hi)+'%';
-  document.getElementById('yr-lo').textContent=lo;
-  document.getElementById('yr-hi').textContent=hi;
-  const active=lo>YEAR_MIN||hi<YEAR_MAX;
-  fill.classList.toggle('active',active);
-  thumbLo.classList.toggle('active',active);
-  thumbHi.classList.toggle('active',active);
+  const lp = sliderPct(yearLo), hp = sliderPct(yearHi);
+  thumbLo.style.left = lp + '%';
+  thumbHi.style.left = hp + '%';
+  fill.style.left  = lp + '%';
+  fill.style.width = (hp - lp) + '%';
+  document.getElementById('yr-lo').textContent = yearLo;
+  document.getElementById('yr-hi').textContent = yearHi;
+  const active = yearLo > YEAR_MIN || yearHi < YEAR_MAX;
+  fill.classList.toggle('active', active);
 }}
-function updateZIndex() {{
-  const lo=parseInt(rangeLo.value), hi=parseInt(rangeHi.value);
-  // hi thumb gets on-top only when strictly to the right of lo
-  // When equal, lo gets priority so user can always drag it left to separate them
-  rangeLo.style.zIndex = (lo >= hi) ? 3 : 2;
-  rangeHi.style.zIndex = (hi > lo)  ? 3 : 2;
+
+let sliderDragging = null;
+
+function xToPct(clientX) {{
+  const r = sliderWrap.getBoundingClientRect();
+  return sliderClamp((clientX - r.left) / r.width, 0, 1);
 }}
-rangeLo.addEventListener('input',()=>{{
-  if(parseInt(rangeLo.value)>parseInt(rangeHi.value)) rangeLo.value=rangeHi.value;
-  yearLo=parseInt(rangeLo.value); yearFiltering=yearLo>YEAR_MIN||yearHi<YEAR_MAX;
-  updateSlider(); updateZIndex(); buildLayers();
+
+sliderWrap.addEventListener('pointerdown', e => {{
+  e.preventDefault();
+  sliderWrap.setPointerCapture(e.pointerId);
+  const p   = xToPct(e.clientX);
+  const lop = sliderPct(yearLo) / 100;
+  const hip = sliderPct(yearHi) / 100;
+  sliderDragging = Math.abs(p - lop) <= Math.abs(p - hip) ? 'lo' : 'hi';
+  thumbLo.classList.toggle('dragging', sliderDragging === 'lo');
+  thumbHi.classList.toggle('dragging', sliderDragging === 'hi');
+  moveDragging(p);
 }});
-rangeHi.addEventListener('input',()=>{{
-  if(parseInt(rangeHi.value)<parseInt(rangeLo.value)) rangeHi.value=rangeLo.value;
-  yearHi=parseInt(rangeHi.value); yearFiltering=yearLo>YEAR_MIN||yearHi<YEAR_MAX;
-  updateSlider(); updateZIndex(); buildLayers();
+
+sliderWrap.addEventListener('pointermove', e => {{
+  if (!sliderDragging) return;
+  moveDragging(xToPct(e.clientX));
 }});
-updateSlider(); updateZIndex();
+
+sliderWrap.addEventListener('pointerup', () => {{
+  thumbLo.classList.remove('dragging');
+  thumbHi.classList.remove('dragging');
+  sliderDragging = null;
+}});
+
+function moveDragging(p) {{
+  const v = sliderVal(p);
+  if (sliderDragging === 'lo') {{
+    yearLo = sliderClamp(v, YEAR_MIN, yearHi);
+  }} else {{
+    yearHi = sliderClamp(v, yearLo, YEAR_MAX);
+  }}
+  yearFiltering = yearLo > YEAR_MIN || yearHi < YEAR_MAX;
+  updateSlider();
+  buildLayers();
+}}
+
+updateSlider();
 
 // ── Reset ─────────────────────────────────────────────────────────────────────
 document.getElementById('reset-btn').addEventListener('click', () => {{
   Object.keys(satActive).forEach(k => satActive[k]=false);
   document.querySelectorAll('.sat-btn').forEach(b => b.classList.remove('on'));
-  rangeLo.value=YEAR_MIN; rangeHi.value=YEAR_MAX;
   yearLo=YEAR_MIN; yearHi=YEAR_MAX; yearFiltering=false;
   updateSlider();
   searchQ=''; document.getElementById('search').value='';
