@@ -1260,28 +1260,69 @@ setInterval(checkUsgsStatus, 60_000);
 # Main
 # ---------------------------------------------------------------------------
 
+def load_previous_features(path="available_scenes.geojson"):
+    """Load features from the last successful run, grouped by dataset."""
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path) as f:
+            prev = json.load(f)
+        by_dataset = {}
+        for feat in prev.get("features", []):
+            ds = feat.get("properties", {}).get("dataset")
+            if ds:
+                by_dataset.setdefault(ds, []).append(feat)
+        print(f"  Loaded {sum(len(v) for v in by_dataset.values()):,} features from previous run as fallback")
+        return by_dataset
+    except Exception as e:
+        print(f"  WARNING: could not load previous geojson — {e}")
+        return {}
+
+
 def main():
     username = os.environ.get("M2M_USERNAME")
     token    = os.environ.get("M2M_TOKEN")
     if not username or not token:
         raise RuntimeError("M2M_USERNAME and M2M_TOKEN must be set")
 
+    # Load previous run's features before we start, so we can fall back per-dataset
+    print("Loading previous run as fallback...")
+    prev_by_dataset = load_previous_features()
+
     print("Logging in to USGS M2M API...")
     api_key = login(username, token)
 
     all_features = []
+    failed = []
     try:
         for dataset, filter_id in DATASETS.items():
             print(f"\n  {DATASET_LABELS[dataset]}...")
-            scenes = search_available(api_key, dataset, filter_id)
-            before = len(all_features)
-            for scene in scenes:
-                f = scene_to_feature(scene, dataset)
-                if f:
-                    all_features.append(f)
-            print(f"  {len(all_features) - before:,} features with spatial bounds")
+            try:
+                scenes = search_available(api_key, dataset, filter_id)
+                fresh = []
+                for scene in scenes:
+                    f = scene_to_feature(scene, dataset)
+                    if f:
+                        fresh.append(f)
+                all_features.extend(fresh)
+                print(f"  {len(fresh):,} features with spatial bounds")
+            except Exception as e:
+                print(f"  WARNING: {dataset} failed — {e}")
+                fallback = prev_by_dataset.get(dataset, [])
+                if fallback:
+                    print(f"  Using {len(fallback):,} features from previous run for {dataset}")
+                    all_features.extend(fallback)
+                else:
+                    print(f"  No previous data for {dataset} — skipping")
+                failed.append(dataset)
     finally:
         logout(api_key)
+
+    if not all_features:
+        raise RuntimeError("All datasets failed and no previous data available — nothing to build")
+
+    if failed:
+        print(f"\nWARNING: {len(failed)} dataset(s) used fallback data: {', '.join(failed)}")
 
     counts    = {}
     years     = []
@@ -1315,16 +1356,40 @@ def main():
     print(f"Year range: {geojson['metadata']['year_min']}–{geojson['metadata']['year_max']}")
     print(f"Satellite types: {sat_seen}")
 
-    with open("available_scenes.geojson", "w") as f:
-        json.dump(geojson, f)
-    print("Saved available_scenes.geojson")
-
     with open("index.html", "w", encoding="utf-8") as f:
         f.write(build_html(geojson))
     print("Saved index.html")
 
+    # Only overwrite the geojson cache when we have a clean full run
+    # so it always contains complete data for future fallback
+    if not failed:
+        with open("available_scenes.geojson", "w") as f:
+            json.dump(geojson, f)
+        print("Saved available_scenes.geojson (full run)")
+    else:
+        print("Skipped overwriting available_scenes.geojson (partial run — keeping previous as fallback)")
+
     print(f"\nDone — {len(all_features):,} scenes mapped.")
 
 
+def build_only(geojson_path="available_scenes.geojson"):
+    """Build index.html from existing geojson without hitting the API."""
+    if not os.path.exists(geojson_path):
+        raise RuntimeError(f"{geojson_path} not found — run without --build-only first")
+    print(f"Loading {geojson_path}...")
+    with open(geojson_path) as f:
+        geojson = json.load(f)
+    n = len(geojson.get("features", []))
+    print(f"  {n:,} features loaded")
+    with open("index.html", "w", encoding="utf-8") as f:
+        f.write(build_html(geojson))
+    print("Saved index.html")
+    print(f"\nDone — {n:,} scenes mapped (build only, no API calls).")
+
+
 if __name__ == "__main__":
-    main()
+    import sys
+    if "--build-only" in sys.argv:
+        build_only()
+    else:
+        main()
