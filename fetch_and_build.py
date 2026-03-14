@@ -70,10 +70,10 @@ def get_satellite_type(mission, dataset):
     if dataset == "corona2":
         if is_argon:             return "KH-5 (ARGON)"
         if 8001 <= n <= 8003:    return "KH-6 (LANYARD)"
-        if 9001 <= n <= 9009:    return "KH-1"
-        if 9010 <= n <= 9015:    return "KH-2"
-        if 9016 <= n <= 9024:    return "KH-3"
-        if 9025 <= n <= 9062:    return "KH-4"
+        if n == 9009:            return "KH-1"
+        if n in (9013, 9017, 9019):                      return "KH-2"
+        if n in (9022, 9023, 9025, 9028, 9029):          return "KH-3"
+        if 9031 <= n <= 9062:    return "KH-4"   # 9031-9032,9035,9037-9062 etc
         if 1001 <= n <= 1052:    return "KH-4A"
         if 1101 <= n <= 1117:    return "KH-4B"
 
