@@ -47,11 +47,11 @@ jobs:
           CONFIGEOF
 
       - name: Step 1 — Run monitoring script (builds scenes.db)
-        if: ${{ !inputs.build_only }}
+        if: ${{ github.event.inputs.build_only != 'true' }}
         run: python monitor.py
 
       - name: Step 2 — Build map from scenes.db
-        run: python fetch_and_build.py ${{ inputs.build_only && '--build-only' || '' }}
+        run: python fetch_and_build.py ${{ github.event.inputs.build_only == 'true' && '--build-only' || '' }}
         env:
           M2M_USERNAME: ${{ secrets.M2M_USERNAME }}
           M2M_TOKEN: ${{ secrets.M2M_TOKEN }}
