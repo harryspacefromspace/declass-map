@@ -6,9 +6,12 @@ on:
   workflow_dispatch:        # Manual trigger from GitHub Actions tab
     inputs:
       build_only:
-        description: 'Build map from existing data without refetching scenes'
-        type: boolean
-        default: false
+        description: 'Skip API fetch and build map from existing data only'
+        type: choice
+        default: 'false'
+        options:
+          - 'false'
+          - 'true'
 
 jobs:
   update:
