@@ -4,13 +4,18 @@ on:
   schedule:
     - cron: "0 5 * * *"   # Every day at 5am UTC
   workflow_dispatch:        # Manual trigger from GitHub Actions tab
+    inputs:
+      build_only:
+        description: 'Build map from existing data without refetching scenes'
+        type: boolean
+        default: false
 
 jobs:
   update:
     runs-on: ubuntu-latest
 
     permissions:
-      contents: write       # Required to commit index.html
+      contents: write
 
     steps:
       - name: Checkout repo
@@ -42,18 +47,25 @@ jobs:
           CONFIGEOF
 
       - name: Step 1 — Run monitoring script (builds scenes.db)
+        if: ${{ !inputs.build_only }}
         run: python monitor.py
 
       - name: Step 2 — Build map from scenes.db
-        run: python fetch_and_build.py
+        run: python fetch_and_build.py ${{ inputs.build_only && '--build-only' || '' }}
         env:
           M2M_USERNAME: ${{ secrets.M2M_USERNAME }}
           M2M_TOKEN: ${{ secrets.M2M_TOKEN }}
 
-      - name: Commit index.html
+      - name: Commit index.html (untrack large files if needed)
         run: |
           git config user.name  "declass-map-bot"
           git config user.email "bot@users.noreply.github.com"
+          # Stop tracking large generated files — safe to run every time
+          git rm --cached scenes.db             2>/dev/null || true
+          git rm --cached available_scenes.geojson 2>/dev/null || true
+          git rm --cached "scenes_chunk_*.geojson" 2>/dev/null || true
+          # Only commit the small HTML file
           git add index.html
+          git add .gitignore 2>/dev/null || true
           git diff --staged --quiet || git commit -m "Daily update $(date -u +%Y-%m-%d)"
           git push
