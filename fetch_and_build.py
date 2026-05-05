@@ -286,7 +286,8 @@ def _load_ne():
     _ne_cache = {
         "countries":    countries[countries.geometry.notnull()],
         "major_places": places[places["POP_MAX"] >= 100_000],
-        "all_places":   places[places["POP_MAX"] >= 30_000],
+        "all_places":   places[places["POP_MAX"] >= 10_000],
+        "small_places": places[places["POP_MAX"] >= 1_000],
         "regions":      regions[regions.geometry.notnull()],
         "shape":        shapely_shape,
     }
@@ -305,15 +306,27 @@ def _enrich_feature(feat, ne):
     p    = feat["properties"]
     year = str(p.get("year") or p.get("acquisitionDate", "")[:4] or "Unknown year")
 
-    # Best city
+    # Best city — try progressively smaller thresholds, then nearest to centroid
     city_name = country_name = None
-    for gdf in [ne["major_places"], ne["all_places"]]:
+    for gdf in [ne["major_places"], ne["all_places"], ne["small_places"]]:
         hits = gdf[gdf.geometry.within(geom) | gdf.geometry.intersects(geom)]
         if not hits.empty:
             best = hits.loc[hits["POP_MAX"].idxmax()]
             city_name    = best["NAME"]
             country_name = best["ADM0NAME"]
             break
+
+    # If still nothing, find nearest city to the centroid (handles ocean/wilderness strips)
+    if not city_name:
+        centroid = geom.centroid
+        gdf = ne["all_places"].copy()
+        if not gdf.empty:
+            gdf["dist"] = gdf.geometry.distance(centroid)
+            nearest = gdf.loc[gdf["dist"].idxmin()]
+            # Only use if reasonably close (within ~2 degrees)
+            if nearest["dist"] < 2.0:
+                city_name    = nearest["NAME"]
+                country_name = nearest["ADM0NAME"]
 
     # Countries intersected
     country_hits = ne["countries"][ne["countries"].geometry.intersects(geom)]
