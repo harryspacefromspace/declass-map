@@ -267,7 +267,17 @@ def _load_ne():
 
     countries = gpd.read_file(countries_shp)[["NAME", "geometry"]].rename(columns={"NAME": "country_name"})
     places    = gpd.read_file(places_shp)[["NAME", "POP_MAX", "ADM0NAME", "geometry"]]
-    regions   = gpd.read_file(regions_shp)[["name", "geometry"]].rename(columns={"name": "region_name"})
+
+    # Regions shapefile column name varies between NE versions — detect it
+    regions_raw = gpd.read_file(regions_shp)
+    region_name_col = next(
+        (c for c in regions_raw.columns if c.lower() in ("name", "name_en", "region")),
+        None
+    )
+    if region_name_col:
+        regions = regions_raw[[region_name_col, "geometry"]].rename(columns={region_name_col: "region_name"})
+    else:
+        regions = gpd.GeoDataFrame(columns=["region_name", "geometry"])
 
     for gdf in [countries, places, regions]:
         if gdf.crs is None or gdf.crs.to_epsg() != 4326:
