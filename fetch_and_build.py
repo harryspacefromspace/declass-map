@@ -8,7 +8,10 @@ date range filters. Filters start OFF (additive model — click to show).
 import os
 import json
 import time
+import zipfile
+import urllib.request
 import requests
+from pathlib import Path
 from datetime import datetime
 
 M2M_URL = "https://m2m.cr.usgs.gov/api/api/json/stable/"
@@ -213,6 +216,136 @@ def scene_to_feature(scene, dataset):
             ),
         },
     }
+
+
+# ---------------------------------------------------------------------------
+# Natural Earth enrichment
+# ---------------------------------------------------------------------------
+
+NE_BASE = "https://naturalearth.s3.amazonaws.com/10m_cultural"
+NE_GEO  = "https://naturalearth.s3.amazonaws.com/10m_physical"
+NE_DATA_DIR = Path("ne_data")
+
+NE_DATASETS = {
+    "countries": f"{NE_BASE}/ne_10m_admin_0_countries.zip",
+    "places":    f"{NE_BASE}/ne_10m_populated_places.zip",
+    "regions":   f"{NE_GEO}/ne_10m_geography_regions_polys.zip",
+}
+
+_ne_cache = {}
+
+def _download_ne(name, url):
+    out_dir = NE_DATA_DIR / name
+    shp_candidates = list(out_dir.glob("*.shp"))
+    if shp_candidates:
+        return shp_candidates[0]
+    out_dir.mkdir(parents=True, exist_ok=True)
+    zip_path = NE_DATA_DIR / f"{name}.zip"
+    print(f"  Downloading Natural Earth {name}...")
+    urllib.request.urlretrieve(url, zip_path)
+    with zipfile.ZipFile(zip_path) as z:
+        z.extractall(out_dir)
+    zip_path.unlink()
+    return list(out_dir.glob("*.shp"))[0]
+
+def _load_ne():
+    """Load Natural Earth geodataframes, cached after first call."""
+    global _ne_cache
+    if _ne_cache:
+        return _ne_cache
+    try:
+        import geopandas as gpd
+        from shapely.geometry import shape as shapely_shape
+    except ImportError:
+        print("  WARNING: geopandas not installed — skipping place-name enrichment.")
+        print("  Run: pip install geopandas shapely")
+        return None
+
+    countries_shp = _download_ne("countries", NE_DATASETS["countries"])
+    places_shp    = _download_ne("places",    NE_DATASETS["places"])
+    regions_shp   = _download_ne("regions",   NE_DATASETS["regions"])
+
+    countries = gpd.read_file(countries_shp)[["NAME", "geometry"]].rename(columns={"NAME": "country_name"})
+    places    = gpd.read_file(places_shp)[["NAME", "POP_MAX", "ADM0NAME", "geometry"]]
+    regions   = gpd.read_file(regions_shp)[["name", "geometry"]].rename(columns={"name": "region_name"})
+
+    for gdf in [countries, places, regions]:
+        if gdf.crs is None or gdf.crs.to_epsg() != 4326:
+            gdf.set_crs(epsg=4326, inplace=True)
+
+    _ne_cache = {
+        "countries":    countries[countries.geometry.notnull()],
+        "major_places": places[places["POP_MAX"] >= 100_000],
+        "all_places":   places[places["POP_MAX"] >= 30_000],
+        "regions":      regions[regions.geometry.notnull()],
+        "shape":        shapely_shape,
+    }
+    return _ne_cache
+
+def _enrich_feature(feat, ne):
+    """Add suggested_title and suggested_tags to a single feature's properties."""
+    geom_raw = feat.get("geometry")
+    if not geom_raw:
+        return
+    try:
+        geom = ne["shape"](geom_raw)
+    except Exception:
+        return
+
+    p    = feat["properties"]
+    year = str(p.get("year") or p.get("acquisitionDate", "")[:4] or "Unknown year")
+
+    # Best city
+    city_name = country_name = None
+    for gdf in [ne["major_places"], ne["all_places"]]:
+        hits = gdf[gdf.geometry.within(geom) | gdf.geometry.intersects(geom)]
+        if not hits.empty:
+            best = hits.loc[hits["POP_MAX"].idxmax()]
+            city_name    = best["NAME"]
+            country_name = best["ADM0NAME"]
+            break
+
+    # Countries intersected
+    country_hits = ne["countries"][ne["countries"].geometry.intersects(geom)]
+    countries = sorted(country_hits["country_name"].tolist())
+
+    # Region fallback
+    region_hits = ne["regions"][ne["regions"].geometry.intersects(geom)]
+    regions = sorted(region_hits["region_name"].tolist())
+
+    # Build title
+    if city_name and country_name:
+        title = f"{city_name}, {country_name} — {year}"
+    elif len(countries) == 1:
+        title = f"{countries[0]} — {year}"
+    elif len(countries) == 2:
+        title = f"{countries[0]} & {countries[1]} — {year}"
+    elif len(countries) > 2:
+        title = f"{countries[0]} & {len(countries)-1} more — {year}"
+    elif regions:
+        title = f"{regions[0]} — {year}"
+    else:
+        title = f"Unknown region — {year}"
+
+    # Build tags
+    tags = set(countries) | set(regions)
+    if city_name:
+        tags.add(city_name)
+
+    p["suggested_title"] = title
+    p["suggested_tags"]  = sorted(tags)
+
+def enrich_features(features):
+    """Enrich all features with suggested_title and suggested_tags. Gracefully skips if geopandas unavailable."""
+    print("\nEnriching scenes with place names...")
+    ne = _load_ne()
+    if ne is None:
+        return  # geopandas not available — silently skip
+    enriched = 0
+    for feat in features:
+        _enrich_feature(feat, ne)
+        enriched += 1
+    print(f"  {enriched:,} scenes enriched with place names.")
 
 
 # ---------------------------------------------------------------------------
@@ -1362,6 +1495,8 @@ def main():
     print(f"Year range: {geojson['metadata']['year_min']}–{geojson['metadata']['year_max']}")
     print(f"Satellite types: {sat_seen}")
 
+    enrich_features(geojson["features"])
+
     with open("index.html", "w", encoding="utf-8") as f:
         f.write(build_html(geojson))
     print("Saved index.html")
@@ -1387,6 +1522,7 @@ def build_only(geojson_path="available_scenes.geojson"):
         geojson = json.load(f)
     n = len(geojson.get("features", []))
     print(f"  {n:,} features loaded")
+    enrich_features(geojson["features"])
     with open("index.html", "w", encoding="utf-8") as f:
         f.write(build_html(geojson))
     print("Saved index.html")
