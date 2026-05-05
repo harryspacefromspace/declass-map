@@ -22,7 +22,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install requests staticmap Pillow
+        run: pip install requests staticmap Pillow geopandas shapely
 
       - name: Generate config.json from secrets
         run: |
