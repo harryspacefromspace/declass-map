@@ -4,21 +4,13 @@ on:
   schedule:
     - cron: "0 5 * * *"   # Every day at 5am UTC
   workflow_dispatch:        # Manual trigger from GitHub Actions tab
-    inputs:
-      build_only:
-        description: 'Skip API fetch and build map from existing data only'
-        type: choice
-        default: 'false'
-        options:
-          - 'false'
-          - 'true'
 
 jobs:
   update:
     runs-on: ubuntu-latest
 
     permissions:
-      contents: write
+      contents: write       # Required to commit the updated files
 
     steps:
       - name: Checkout repo
@@ -30,7 +22,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install requests staticmap Pillow
+        run: pip install requests staticmap Pillow geopandas shapely
 
       - name: Generate config.json from secrets
         run: |
@@ -49,26 +41,19 @@ jobs:
           }
           CONFIGEOF
 
-      - name: Step 1 — Run monitoring script (builds scenes.db)
-        if: ${{ github.event.inputs.build_only != 'true' }}
+      - name: Step 1 — Run monitoring script (updates scenes.db)
         run: python monitor.py
 
       - name: Step 2 — Build map from scenes.db
-        run: python fetch_and_build.py ${{ github.event.inputs.build_only == 'true' && '--build-only' || '' }}
+        run: python fetch_and_build.py
         env:
           M2M_USERNAME: ${{ secrets.M2M_USERNAME }}
           M2M_TOKEN: ${{ secrets.M2M_TOKEN }}
 
-      - name: Commit index.html (untrack large files if needed)
+      - name: Commit updated files
         run: |
           git config user.name  "declass-map-bot"
           git config user.email "bot@users.noreply.github.com"
-          # Stop tracking large generated files — safe to run every time
-          git rm --cached scenes.db             2>/dev/null || true
-          git rm --cached available_scenes.geojson 2>/dev/null || true
-          git rm --cached "scenes_chunk_*.geojson" 2>/dev/null || true
-          # Only commit the small HTML file
-          git add index.html
-          git add .gitignore 2>/dev/null || true
+          git add scenes.db index.html available_scenes.geojson
           git diff --staged --quiet || git commit -m "Daily update $(date -u +%Y-%m-%d)"
           git push
