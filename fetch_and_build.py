@@ -319,12 +319,17 @@ def _enrich_feature(feat, ne):
     # If still nothing, find nearest city to the centroid (handles ocean/wilderness strips)
     if not city_name:
         centroid = geom.centroid
-        gdf = ne["all_places"].copy()
+        gdf = ne["all_places"].copy().to_crs(epsg=3857)
+        centroid_proj = gdf.crs.from_epsg(3857)
+        from shapely.ops import transform
+        import pyproj
+        project = pyproj.Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True).transform
+        centroid_m = transform(project, centroid)
         if not gdf.empty:
-            gdf["dist"] = gdf.geometry.distance(centroid)
+            gdf["dist"] = gdf.geometry.distance(centroid_m)
             nearest = gdf.loc[gdf["dist"].idxmin()]
-            # Only use if reasonably close (within ~2 degrees)
-            if nearest["dist"] < 2.0:
+            # Only use if within ~200km
+            if nearest["dist"] < 200_000:
                 city_name    = nearest["NAME"]
                 country_name = nearest["ADM0NAME"]
 
