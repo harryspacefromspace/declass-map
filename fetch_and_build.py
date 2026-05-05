@@ -456,7 +456,8 @@ html{{height:100%}}body{{background:#0a0a0a;color:#e0e0e0;font-family:-apple-sys
 .pu-img{{width:100%;max-height:190px;object-fit:contain;object-position:center;
   border-radius:6px;margin-bottom:10px;display:block;cursor:pointer;background:#0d0d0d;
   border:1px solid #1e1e1e}}
-.pu h3{{font-size:11.5px;font-weight:600;color:#e8e8e8;margin-bottom:6px;font-family:monospace;letter-spacing:.03em;line-height:1.4}}
+.pu-place{{font-size:13px;font-weight:600;color:#e8e8e8;margin-bottom:3px;line-height:1.3}}
+.pu h3{{font-size:10px;font-weight:400;color:#444;margin-bottom:6px;font-family:monospace;letter-spacing:.03em;line-height:1.4}}
 .pu-tags{{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:8px}}
 .pu-tag{{font-size:9.5px;padding:2px 7px;border-radius:3px;border:1px solid #222;color:#777;background:#111}}
 .pu-tag.sat{{color:#aaa;border-color:#2e2e2e}}
@@ -753,8 +754,13 @@ function renderPopup() {{
       <button id="pu-next" ${{puIdx===puFeats.length-1?'disabled':''}}>Next →</button>
     </div>` : '';
 
+  const placeHtml = p.suggested_title
+    ? `<div class="pu-place">${{p.suggested_title}}</div>`
+    : '';
+
   popup.setContent(`<div class="pu">
     ${{imgHtml}}
+    ${{placeHtml}}
     <h3>${{p.entityId}}</h3>
     <div class="pu-tags">
       <span class="pu-tag sat">${{p.satellite}}</span>
