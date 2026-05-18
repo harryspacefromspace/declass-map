@@ -384,22 +384,44 @@ html{{height:100%}}body{{background:#0a0a0a;color:#e0e0e0;font-family:-apple-sys
 #search:focus{{border-color:#444;background:#1a1a1a}}
 #search::placeholder{{color:#383838}}
 
-/* ── Filter bar ── */
+/* ── Toolbar ── */
 #filters{{
   background:#0a0a0a;border-bottom:1px solid #161616;
-  padding:7px 16px;display:flex;align-items:center;gap:0;flex-wrap:nowrap;overflow-x:auto;
+  padding:6px 16px;display:flex;align-items:center;gap:6px;flex-wrap:nowrap;position:relative;z-index:800;
 }}
-#filters::-webkit-scrollbar{{height:0}}
-.filter-section{{display:flex;align-items:center;gap:7px;padding-right:18px;margin-right:18px;border-right:1px solid #1a1a1a;flex-shrink:0}}
-.filter-section:last-child{{border-right:none;padding-right:0;margin-right:0;margin-left:auto}}
-.filter-label{{font-size:9.5px;color:#383838;text-transform:uppercase;letter-spacing:.08em;white-space:nowrap}}
+.tb-btn{{
+  display:flex;align-items:center;gap:5px;
+  background:transparent;border:1px solid #1e1e1e;color:#3a3a3a;
+  padding:4px 10px;border-radius:5px;cursor:pointer;font-size:10.5px;
+  transition:all .12s;white-space:nowrap;flex-shrink:0;
+}}
+.tb-btn:hover{{border-color:#3a3a3a;color:#888}}
+.tb-btn.active{{border-color:#484848;color:#aaa;background:#181818}}
+.tb-btn.has-filter{{border-color:#383838;color:#888}}
+.tb-caret{{font-size:8px;color:#2e2e2e;transition:transform .15s}}
+.tb-btn.active .tb-caret{{transform:rotate(180deg)}}
+#reset-btn{{background:transparent;border:1px solid #1e1e1e;color:#2e2e2e;padding:4px 10px;border-radius:5px;cursor:pointer;font-size:10.5px;transition:all .12s;margin-left:auto}}
+#reset-btn:hover{{border-color:#444;color:#777}}
 
-/* Satellite buttons — colour-coded by family */
+/* ── Dropdown panels ── */
+.dd-panel{{
+  position:absolute;top:calc(100% + 4px);
+  background:#0f0f0f;border:1px solid #1e1e1e;border-radius:8px;
+  z-index:2000;min-width:200px;max-width:480px;
+  opacity:0;pointer-events:none;transform:translateY(-4px);
+  transition:opacity .12s,transform .12s;
+  box-shadow:0 8px 24px rgba(0,0,0,.6);
+}}
+.dd-panel.open{{opacity:1;pointer-events:auto;transform:translateY(0)}}
+.dd-inner{{padding:12px 14px}}
+.dd-label{{font-size:9px;text-transform:uppercase;letter-spacing:.1em;color:#333;margin-bottom:8px}}
+.dd-chips{{display:flex;flex-wrap:wrap;gap:4px}}
+
+/* Satellite buttons */
 .sat-btn{{
   background:transparent;border:1px solid #1e1e1e;color:#3a3a3a;
   padding:3px 9px;border-radius:4px;cursor:pointer;font-size:10.5px;
-  transition:all .12s;white-space:nowrap;flex-shrink:0;
-  --sat-c:#888;
+  transition:all .12s;white-space:nowrap;--sat-c:#888;
 }}
 .sat-btn:hover{{border-color:#3a3a3a;color:#888}}
 .sat-btn.on{{
@@ -407,68 +429,52 @@ html{{height:100%}}body{{background:#0a0a0a;color:#e0e0e0;font-family:-apple-sys
   border-color:color-mix(in srgb,var(--sat-c) 50%,transparent);
   color:var(--sat-c);
 }}
-.sat-quick{{font-size:9.5px;color:#2e2e2e;cursor:pointer;padding:2px 5px;border-radius:3px;transition:color .12s;background:none;border:none;white-space:nowrap}}
+.sat-quick{{font-size:9.5px;color:#2e2e2e;cursor:pointer;padding:2px 5px;border-radius:3px;transition:color .12s;background:none;border:none}}
 .sat-quick:hover{{color:#666}}
+.dd-divider{{border:none;border-top:1px solid #1a1a1a;margin:10px 0}}
 
-/* Year slider */
-.yr-val{{font-size:11px;color:#555;min-width:32px;text-align:center;font-variant-numeric:tabular-nums}}
-.slider-wrap{{position:relative;width:140px;height:20px;flex-shrink:0;cursor:pointer;user-select:none}}
+/* Camera chips */
+.cam-btn{{background:transparent;border:1px solid #1e1e1e;color:#3a3a3a;
+  padding:3px 8px;border-radius:4px;cursor:pointer;font-size:10.5px;
+  transition:all .12s;white-space:nowrap;display:flex;align-items:center;gap:4px}}
+.cam-btn:hover{{border-color:#3a3a3a;color:#888}}
+.cam-btn.on{{background:#1e1e1e;border-color:#484848;color:#bbb}}
+.cam-ds{{font-size:8px;color:#444;text-transform:uppercase;letter-spacing:.05em}}
+.cam-btn.on .cam-ds{{color:#666}}
+
+/* Date inputs */
+.date-input{{background:#111;border:1px solid #1e1e1e;color:#555;padding:3px 8px;
+  border-radius:4px;font-size:10.5px;outline:none;cursor:pointer;width:110px;color-scheme:dark}}
+.date-input:focus{{border-color:#444;color:#999}}
+.date-sep{{font-size:10px;color:#2e2e2e}}
+.date-row{{display:flex;align-items:center;gap:8px}}
+
+/* Year slider inside dropdown */
+.yr-val{{font-size:11px;color:#555;min-width:30px;text-align:center;font-variant-numeric:tabular-nums}}
+.slider-wrap{{position:relative;width:180px;height:20px;flex-shrink:0;cursor:pointer;user-select:none}}
 #slider-track{{position:absolute;top:50%;left:0;right:0;height:2px;background:#1e1e1e;transform:translateY(-50%);border-radius:2px;pointer-events:none}}
 #slider-fill{{position:absolute;top:50%;height:2px;background:#2e2e2e;transform:translateY(-50%);border-radius:2px;transition:background .2s;pointer-events:none}}
 #slider-fill.active{{background:#484848}}
 .thumb{{position:absolute;top:50%;width:10px;height:10px;background:#383838;border-radius:50%;transform:translate(-50%,-50%);pointer-events:none;border:1px solid #555;transition:background .15s}}
 .thumb.dragging{{background:#777}}
+.slider-row{{display:flex;align-items:center;gap:8px;margin-top:10px}}
 
-/* Basemap + reset */
-.bm-btn{{background:transparent;border:1px solid #1e1e1e;color:#383838;padding:3px 8px;border-radius:4px;cursor:pointer;font-size:10px;transition:all .12s;flex-shrink:0}}
+/* Basemap buttons */
+.bm-btn{{background:transparent;border:1px solid #1e1e1e;color:#383838;padding:3px 8px;border-radius:4px;cursor:pointer;font-size:10px;transition:all .12s}}
 .bm-btn:hover{{border-color:#444;color:#888}}
 .bm-btn.on{{background:#1e1e1e;border-color:#484848;color:#bbb}}
-#reset-btn{{background:transparent;border:1px solid #1e1e1e;color:#2e2e2e;padding:3px 9px;border-radius:4px;cursor:pointer;font-size:10px;transition:all .12s;flex-shrink:0}}
-#reset-btn:hover{{border-color:#444;color:#777}}
 
-/* Camera filter chips */
-.cam-btn{{background:transparent;border:1px solid #1e1e1e;color:#3a3a3a;
-  padding:2px 8px;border-radius:4px;cursor:pointer;font-size:10.5px;
-  transition:all .12s;white-space:nowrap;flex-shrink:0;display:flex;align-items:center;gap:4px}}
-.cam-btn:hover{{border-color:#3a3a3a;color:#888}}
-.cam-btn.on{{background:#1e1e1e;border-color:#484848;color:#bbb}}
-.cam-ds{{font-size:8.5px;color:#444;text-transform:uppercase;letter-spacing:.05em}}
-.cam-btn.on .cam-ds{{color:#666}}
-
-/* Exact date inputs */
-.date-input{{background:#111;border:1px solid #1e1e1e;color:#555;padding:2px 6px;
-  border-radius:4px;font-size:10.5px;outline:none;cursor:pointer;width:96px;
-  color-scheme:dark}}
-.date-input:focus{{border-color:#444;color:#999}}
-.date-sep{{font-size:10px;color:#2e2e2e}}
-
-/* Mission checklist panel */
-#mission-panel{{
-  position:absolute;top:0;left:0;bottom:0;width:240px;
-  background:#0c0c0c;border-right:1px solid #1a1a1a;
-  z-index:900;overflow-y:auto;transform:translateX(-100%);
-  transition:transform .2s ease;padding:10px 0 20px;
-}}
-#mission-panel.open{{transform:translateX(0)}}
-#mission-panel::-webkit-scrollbar{{width:4px}}
-#mission-panel::-webkit-scrollbar-thumb{{background:#222;border-radius:2px}}
-#mission-toggle{{
-  position:absolute;top:12px;left:12px;z-index:1000;
-  background:rgba(10,10,10,.85);backdrop-filter:blur(8px);
-  border:1px solid #242424;color:#555;padding:5px 10px;
-  border-radius:6px;font-size:10.5px;cursor:pointer;transition:all .15s;
-}}
-#mission-toggle:hover{{border-color:#444;color:#aaa}}
-#mission-toggle.open{{border-color:#444;color:#aaa;background:rgba(20,20,20,.95)}}
-.ms-group{{padding:10px 14px 4px}}
-.ms-header{{display:flex;align-items:center;gap:6px;margin-bottom:6px;padding-bottom:6px;border-bottom:1px solid #1a1a1a}}
+/* Mission checklist inside dropdown */
+.ms-group{{margin-bottom:10px}}
+.ms-header{{display:flex;align-items:center;gap:6px;margin-bottom:5px}}
 .ms-ds-label{{font-size:9px;text-transform:uppercase;letter-spacing:.1em;color:#444;flex:1}}
-.ms-all{{font-size:9px;color:#2a2a2a;cursor:pointer;padding:1px 5px;border-radius:3px;
-  background:none;border:1px solid #1e1e1e;transition:color .12s}}
+.ms-all{{font-size:9px;color:#2a2a2a;cursor:pointer;padding:1px 5px;border-radius:3px;background:none;border:1px solid #1e1e1e;transition:color .12s}}
 .ms-all:hover{{color:#666;border-color:#444}}
-.ms-items{{display:flex;flex-direction:column;gap:1px}}
-.ms-item{{display:flex;align-items:center;gap:6px;padding:3px 4px;border-radius:3px;cursor:pointer}}
-.ms-item:hover{{background:#111}}
+.ms-items{{display:flex;flex-direction:column;gap:1px;max-height:200px;overflow-y:auto}}
+.ms-items::-webkit-scrollbar{{width:3px}}
+.ms-items::-webkit-scrollbar-thumb{{background:#222}}
+.ms-item{{display:flex;align-items:center;gap:6px;padding:2px 4px;border-radius:3px;cursor:pointer}}
+.ms-item:hover{{background:#161616}}
 .ms-item input{{accent-color:#555;width:11px;height:11px;cursor:pointer;flex-shrink:0}}
 .ms-num{{font-size:10.5px;color:#555;flex:1;font-variant-numeric:tabular-nums}}
 .ms-count{{font-size:9px;color:#2e2e2e;font-variant-numeric:tabular-nums}}
@@ -644,60 +650,86 @@ html{{height:100%}}body{{background:#0a0a0a;color:#e0e0e0;font-family:-apple-sys
 </div>
 
 <div id="filters">
-  <div class="filter-section">
-    <span class="filter-label">Satellite</span>
-    {sat_buttons}
-    <button class="sat-quick" id="sat-all">All</button>
-    <button class="sat-quick" id="sat-none">None</button>
-  </div>
 
-  <div class="filter-section">
-    <span class="filter-label">Camera</span>
-    {camera_chips_html}
-  </div>
-
-  <div class="filter-section">
-    <span class="filter-label">Date</span>
-    <input type="date" class="date-input" id="date-lo" value="{date_min}" min="{date_min}" max="{date_max}">
-    <span class="date-sep">→</span>
-    <input type="date" class="date-input" id="date-hi" value="{date_max}" min="{date_min}" max="{date_max}">
-  </div>
-
-  <div class="filter-section">
-    <span class="filter-label">Years</span>
-    <span class="yr-val" id="yr-lo">{year_min}</span>
-    <div class="slider-wrap" id="slider-wrap">
-      <div id="slider-track"></div>
-      <div id="slider-fill"></div>
-      <div class="thumb" id="thumb-lo"></div>
-      <div class="thumb" id="thumb-hi"></div>
+  <!-- Satellite dropdown -->
+  <button class="tb-btn" id="tb-sat">Satellite <span class="tb-caret">▾</span></button>
+  <div class="dd-panel" id="dd-sat" style="left:16px">
+    <div class="dd-inner">
+      <div class="dd-label">Satellite system</div>
+      <div class="dd-chips">
+        {sat_buttons}
+      </div>
+      <hr class="dd-divider">
+      <div style="display:flex;gap:4px">
+        <button class="sat-quick" id="sat-all">All</button>
+        <button class="sat-quick" id="sat-none">None</button>
+      </div>
     </div>
-    <span class="yr-val" id="yr-hi">{year_max}</span>
   </div>
 
-  <div class="filter-section">
-    <span class="filter-label">Basemap</span>
-    <button class="bm-btn on" data-bm="dark">Dark</button>
-    <button class="bm-btn" data-bm="satellite">Satellite</button>
-    <button class="bm-btn" data-bm="hybrid">Hybrid</button>
-    <button class="bm-btn" data-bm="osm">OSM</button>
+  <!-- Camera dropdown -->
+  <button class="tb-btn" id="tb-cam">Camera <span class="tb-caret">▾</span></button>
+  <div class="dd-panel" id="dd-cam">
+    <div class="dd-inner">
+      <div class="dd-label">Camera type</div>
+      <div class="dd-chips">{camera_chips_html}</div>
+    </div>
   </div>
 
-  <div class="filter-section">
-    <button id="reset-btn">Reset</button>
+  <!-- Date dropdown -->
+  <button class="tb-btn" id="tb-date">Date <span class="tb-caret">▾</span></button>
+  <div class="dd-panel" id="dd-date">
+    <div class="dd-inner">
+      <div class="dd-label">Exact date range</div>
+      <div class="date-row">
+        <input type="date" class="date-input" id="date-lo" value="{date_min}" min="{date_min}" max="{date_max}">
+        <span class="date-sep">→</span>
+        <input type="date" class="date-input" id="date-hi" value="{date_max}" min="{date_min}" max="{date_max}">
+      </div>
+      <hr class="dd-divider">
+      <div class="dd-label">Year range</div>
+      <div class="slider-row">
+        <span class="yr-val" id="yr-lo">{year_min}</span>
+        <div class="slider-wrap" id="slider-wrap">
+          <div id="slider-track"></div>
+          <div id="slider-fill"></div>
+          <div class="thumb" id="thumb-lo"></div>
+          <div class="thumb" id="thumb-hi"></div>
+        </div>
+        <span class="yr-val" id="yr-hi">{year_max}</span>
+      </div>
+    </div>
   </div>
+
+  <!-- Missions dropdown -->
+  <button class="tb-btn" id="tb-mission">Missions <span class="tb-caret">▾</span></button>
+  <div class="dd-panel" id="dd-mission" style="max-height:420px;overflow-y:auto">
+    <div class="dd-inner">
+      {mission_sections_html}
+    </div>
+  </div>
+
+  <!-- Basemap dropdown -->
+  <button class="tb-btn" id="tb-bm">Basemap <span class="tb-caret">▾</span></button>
+  <div class="dd-panel" id="dd-bm">
+    <div class="dd-inner">
+      <div class="dd-label">Map style</div>
+      <div class="dd-chips">
+        <button class="bm-btn on" data-bm="dark">Dark</button>
+        <button class="bm-btn" data-bm="satellite">Satellite</button>
+        <button class="bm-btn" data-bm="hybrid">Hybrid</button>
+        <button class="bm-btn" data-bm="osm">OSM</button>
+      </div>
+    </div>
+  </div>
+
+  <button id="reset-btn">Reset</button>
 </div>
 
 <div id="map">
   <div id="empty-state">
     <p>No scenes selected</p>
     <small>Choose a satellite type above to show footprints</small>
-  </div>
-
-  <!-- Mission filter panel -->
-  <button id="mission-toggle">Missions</button>
-  <div id="mission-panel">
-    {mission_sections_html}
   </div>
 
   <div id="counter">0 of {total:,} scenes</div>
@@ -1125,15 +1157,74 @@ document.getElementById('date-hi').addEventListener('change', e => {{
   buildLayers();
 }});
 
-// ── Mission panel ─────────────────────────────────────────────────────────────
-document.getElementById('mission-toggle').addEventListener('click', () => {{
-  const panel = document.getElementById('mission-panel');
-  const btn   = document.getElementById('mission-toggle');
-  panel.classList.toggle('open');
-  btn.classList.toggle('open');
+// ── Dropdown system ───────────────────────────────────────────────────────────
+const DD_PAIRS = [
+  ['tb-sat',     'dd-sat'],
+  ['tb-cam',     'dd-cam'],
+  ['tb-date',    'dd-date'],
+  ['tb-mission', 'dd-mission'],
+  ['tb-bm',      'dd-bm'],
+];
+
+function closeAllDropdowns(except) {{
+  DD_PAIRS.forEach(([btnId, panelId]) => {{
+    if (panelId === except) return;
+    document.getElementById(btnId).classList.remove('active');
+    document.getElementById(panelId).classList.remove('open');
+  }});
+}}
+
+DD_PAIRS.forEach(([btnId, panelId]) => {{
+  const btn   = document.getElementById(btnId);
+  const panel = document.getElementById(panelId);
+  btn.addEventListener('click', e => {{
+    e.stopPropagation();
+    const opening = !panel.classList.contains('open');
+    closeAllDropdowns(null);
+    if (opening) {{
+      // Position panel so it doesn't overflow right edge
+      const br = btn.getBoundingClientRect();
+      const pw = panel.offsetWidth || 260;
+      const left = Math.min(br.left, window.innerWidth - pw - 16);
+      panel.style.left = Math.max(0, left) + 'px';
+      btn.classList.add('active');
+      panel.classList.add('open');
+    }}
+  }});
 }});
 
-// Mission checkboxes
+// Close on outside click
+document.addEventListener('click', () => closeAllDropdowns(null));
+document.querySelectorAll('.dd-panel').forEach(p =>
+  p.addEventListener('click', e => e.stopPropagation()));
+
+// Update toolbar button state to reflect active filters
+function updateToolbarState() {{
+  // Satellite
+  const anySat = Object.values(satActive).some(Boolean);
+  const allSat = Object.values(satActive).every(Boolean);
+  document.getElementById('tb-sat').classList.toggle('has-filter', anySat && !allSat);
+
+  // Camera — has-filter if any cam is off
+  const camOff = Object.values(cameraActive).some(v => v === false);
+  document.getElementById('tb-cam').classList.toggle('has-filter', camOff);
+
+  // Date
+  const dateFiltered = (dateLo && dateLo !== document.getElementById('date-lo').min) ||
+                       (dateHi && dateHi !== document.getElementById('date-hi').max) ||
+                       yearFiltering;
+  document.getElementById('tb-date').classList.toggle('has-filter', dateFiltered);
+
+  // Missions
+  const missionFiltered = Object.values(missionActive).some(v => v !== null);
+  document.getElementById('tb-mission').classList.toggle('has-filter', missionFiltered);
+}}
+
+// Patch buildLayers to also update toolbar state
+const _origBuildLayers = buildLayers;
+function buildLayers() {{ _origBuildLayers(); updateToolbarState(); }}
+
+// ── Mission checkboxes
 document.querySelectorAll('.ms-chk').forEach(chk => {{
   chk.addEventListener('change', () => {{
     const ds = chk.dataset.ds;
