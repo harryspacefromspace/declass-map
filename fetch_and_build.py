@@ -327,6 +327,28 @@ def build_html(geojson):
                 f'<span class="cam-ds">{DS_SHORT[ds]}</span>{cam}</button>'
             )
 
+    # Build sat→missions map and mission→date range for smart linking (feature 4)
+    sat_mission_map = _col.defaultdict(list)   # {sat_type: [mission_num, ...]}
+    mission_dates   = {}                        # {mission_num: {ds, lo, hi}}
+    for feat in geojson["features"]:
+        p = feat["properties"]
+        sat = p.get("satellite")
+        m   = p.get("mission")
+        ds  = p.get("dataset", "")
+        acq = p.get("acquisitionDate", "")[:10]
+        if sat and m and m not in sat_mission_map[sat]:
+            sat_mission_map[sat].append(m)
+        if m and acq:
+            if m not in mission_dates:
+                mission_dates[m] = {"ds": ds, "lo": acq, "hi": acq}
+            else:
+                if acq < mission_dates[m]["lo"]: mission_dates[m]["lo"] = acq
+                if acq > mission_dates[m]["hi"]: mission_dates[m]["hi"] = acq
+
+    sat_mission_map_str = json.dumps({k: sorted(v, key=lambda x: int(x) if x.isdigit() else x)
+                                       for k, v in sat_mission_map.items()})
+    mission_dates_str   = json.dumps(mission_dates)
+
     missions_json_str = json.dumps(missions_json)
 
     counts_html = " &nbsp;|&nbsp; ".join(
@@ -478,6 +500,33 @@ html{{height:100%}}body{{background:#0a0a0a;color:#e0e0e0;font-family:-apple-sys
 .ms-item input{{accent-color:#555;width:11px;height:11px;cursor:pointer;flex-shrink:0}}
 .ms-num{{font-size:10.5px;color:#555;flex:1;font-variant-numeric:tabular-nums}}
 .ms-count{{font-size:9px;color:#2e2e2e;font-variant-numeric:tabular-nums}}
+
+/* ── Filter summary bar ── */
+#filter-summary{{
+  background:#0a0a0a;border-bottom:1px solid #161616;
+  padding:0 16px;display:flex;align-items:center;gap:5px;flex-wrap:wrap;
+  min-height:0;max-height:0;overflow:hidden;transition:max-height .2s,padding .2s;
+}}
+#filter-summary.visible{{min-height:28px;max-height:60px;padding:4px 16px}}
+.fs-pill{{
+  display:inline-flex;align-items:center;gap:4px;
+  background:#181818;border:1px solid #2a2a2a;color:#777;
+  padding:2px 7px 2px 8px;border-radius:20px;font-size:10px;white-space:nowrap;
+}}
+.fs-pill button{{
+  background:none;border:none;color:#444;cursor:pointer;font-size:11px;
+  padding:0 0 0 2px;line-height:1;transition:color .1s;
+}}
+.fs-pill button:hover{{color:#aaa}}
+.fs-clear-all{{font-size:10px;color:#2e2e2e;cursor:pointer;padding:2px 6px;
+  background:none;border:none;transition:color .12s;margin-left:2px}}
+.fs-clear-all:hover{{color:#777}}
+
+/* Dropdown header row */
+.dd-head{{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}}
+.dd-clear{{font-size:9.5px;color:#2a2a2a;cursor:pointer;background:none;
+  border:1px solid #1e1e1e;padding:1px 7px;border-radius:3px;transition:all .12s}}
+.dd-clear:hover{{color:#777;border-color:#444}}
 
 /* Map */
 #map{{flex:1;position:relative}}
@@ -655,7 +704,7 @@ html{{height:100%}}body{{background:#0a0a0a;color:#e0e0e0;font-family:-apple-sys
   <button class="tb-btn" id="tb-sat">Satellite <span class="tb-caret">▾</span></button>
   <div class="dd-panel" id="dd-sat" style="left:16px">
     <div class="dd-inner">
-      <div class="dd-label">Satellite system</div>
+      <div class="dd-head"><div class="dd-label">Satellite system</div><button class="dd-clear" data-target="sat">Clear</button></div>
       <div class="dd-chips">
         {sat_buttons}
       </div>
@@ -671,7 +720,7 @@ html{{height:100%}}body{{background:#0a0a0a;color:#e0e0e0;font-family:-apple-sys
   <button class="tb-btn" id="tb-cam">Camera <span class="tb-caret">▾</span></button>
   <div class="dd-panel" id="dd-cam">
     <div class="dd-inner">
-      <div class="dd-label">Camera type</div>
+      <div class="dd-head"><div class="dd-label">Camera type</div><button class="dd-clear" data-target="cam">Clear</button></div>
       <div class="dd-chips">{camera_chips_html}</div>
     </div>
   </div>
@@ -680,7 +729,7 @@ html{{height:100%}}body{{background:#0a0a0a;color:#e0e0e0;font-family:-apple-sys
   <button class="tb-btn" id="tb-date">Date <span class="tb-caret">▾</span></button>
   <div class="dd-panel" id="dd-date">
     <div class="dd-inner">
-      <div class="dd-label">Exact date range</div>
+      <div class="dd-head"><div class="dd-label">Exact date range</div><button class="dd-clear" data-target="date">Clear</button></div>
       <div class="date-row">
         <input type="date" class="date-input" id="date-lo" value="{date_min}" min="{date_min}" max="{date_max}">
         <span class="date-sep">→</span>
@@ -705,6 +754,7 @@ html{{height:100%}}body{{background:#0a0a0a;color:#e0e0e0;font-family:-apple-sys
   <button class="tb-btn" id="tb-mission">Missions <span class="tb-caret">▾</span></button>
   <div class="dd-panel" id="dd-mission" style="max-height:420px;overflow-y:auto">
     <div class="dd-inner">
+      <div class="dd-head" style="margin-bottom:10px"><div class="dd-label">Mission</div><button class="dd-clear" data-target="mission">Clear</button></div>
       {mission_sections_html}
     </div>
   </div>
@@ -719,10 +769,12 @@ html{{height:100%}}body{{background:#0a0a0a;color:#e0e0e0;font-family:-apple-sys
   </div>
 </div>
 
+<div id="filter-summary"></div>
+
 <div id="map">
   <div id="empty-state">
     <p>No scenes selected</p>
-    <small>Choose a satellite type above to show footprints</small>
+    <small>Use the filters above to narrow results</small>
   </div>
 
   <div id="counter">0 of {total:,} scenes</div>
@@ -806,8 +858,14 @@ setBasemap('dark');
 setTimeout(() => map.invalidateSize(), 100);
 
 // ── Filter state ──────────────────────────────────────────────────────────────
+const SAT_MISSION_MAP = {sat_mission_map_str};
+const MISSION_DATES   = {mission_dates_str};
 const satActive = {{}};
-document.querySelectorAll('.sat-btn').forEach(b => satActive[b.dataset.sat] = false);
+// All satellites ON by default
+document.querySelectorAll('.sat-btn').forEach(b => {{
+  satActive[b.dataset.sat] = true;
+  b.classList.add('on');
+}});
 
 const MISSIONS_BY_DS = {missions_json_str};
 let yearLo = YEAR_MIN, yearHi = YEAR_MAX, yearFiltering = false, searchQ = '';
@@ -822,8 +880,6 @@ const cameraActive = {{}};
 document.querySelectorAll('.cam-btn').forEach(b => {{
   cameraActive[b.dataset.ds + '|' + b.dataset.cam] = true;
 }});
-
-function anySatOn() {{ return Object.values(satActive).some(Boolean); }}
 
 // ── Layers ────────────────────────────────────────────────────────────────────
 const layers = {{}};
@@ -841,11 +897,6 @@ function styleHover(ds) {{
 function buildLayers() {{
   Object.values(layers).forEach(l => {{ try {{ map.removeLayer(l); }} catch(e) {{}} }});
   visibleFeats = [];
-
-  if (!anySatOn()) {{
-    updateCounter(0);
-    return;
-  }}
 
   const feats = GEOJSON.features.filter(f => {{
     const p = f.properties;
@@ -897,6 +948,7 @@ function buildLayers() {{
   visibleFeats = feats;
   updateCounter(feats.length);
   updateToolbarState();
+  updateFilterSummary();
 }}
 
 function updateCounter(n) {{
@@ -904,7 +956,7 @@ function updateCounter(n) {{
   const total = GEOJSON.features.length;
   el.textContent = n.toLocaleString() + ' of ' + total.toLocaleString() + ' scenes';
   el.classList.toggle('has-scenes', n > 0);
-  document.getElementById('empty-state').classList.toggle('hidden', n > 0 || anySatOn());
+  document.getElementById('empty-state').classList.toggle('hidden', n > 0);
 }}
 
 buildLayers();
@@ -1013,22 +1065,48 @@ map.on('click', e => {{
 map.on('popupclose', () => {{ if (highlightLayer) {{ map.removeLayer(highlightLayer); highlightLayer=null; }} }});
 
 // ── Satellite buttons ─────────────────────────────────────────────────────────
+function syncMissionsToSat(sat, on) {{
+  // When a satellite is toggled, check/uncheck its missions in the mission panel
+  const missions = SAT_MISSION_MAP[sat] || [];
+  if (!missions.length) return;
+  missions.forEach(m => {{
+    // Find which dataset this mission belongs to
+    const md = MISSION_DATES[m];
+    if (!md) return;
+    const ds = md.ds;
+    const chk = document.querySelector(`.ms-chk[data-ds="${{ds}}"][value="${{m}}"]`);
+    if (chk) chk.checked = on;
+  }});
+  // Recompute missionActive for affected datasets
+  Object.keys(MISSIONS_BY_DS).forEach(ds => {{
+    const all = MISSIONS_BY_DS[ds] || [];
+    const checked = [...document.querySelectorAll(`.ms-chk[data-ds="${{ds}}"]`)]
+      .filter(c => c.checked).map(c => c.value);
+    missionActive[ds] = checked.length === all.length ? null : new Set(checked);
+  }});
+}}
+
 document.querySelectorAll('.sat-btn').forEach(btn => {{
   btn.addEventListener('click', () => {{
     const s = btn.dataset.sat;
     satActive[s] = !satActive[s];
     btn.classList.toggle('on', satActive[s]);
+    syncMissionsToSat(s, satActive[s]);
     buildLayers();
   }});
 }});
 document.getElementById('sat-all').addEventListener('click', () => {{
   Object.keys(satActive).forEach(k => satActive[k] = true);
   document.querySelectorAll('.sat-btn').forEach(b => b.classList.add('on'));
+  Object.keys(missionActive).forEach(ds => {{ missionActive[ds] = null; }});
+  document.querySelectorAll('.ms-chk').forEach(c => {{ c.checked = true; }});
   buildLayers();
 }});
 document.getElementById('sat-none').addEventListener('click', () => {{
   Object.keys(satActive).forEach(k => satActive[k] = false);
   document.querySelectorAll('.sat-btn').forEach(b => b.classList.remove('on'));
+  Object.keys(missionActive).forEach(ds => {{ missionActive[ds] = new Set(); }});
+  document.querySelectorAll('.ms-chk').forEach(c => {{ c.checked = false; }});
   buildLayers();
 }});
 
@@ -1100,27 +1178,158 @@ function moveDragging(p) {{
 updateSlider();
 
 // ── Reset ─────────────────────────────────────────────────────────────────────
-document.getElementById('reset-btn').addEventListener('click', () => {{
-  Object.keys(satActive).forEach(k => satActive[k]=false);
-  document.querySelectorAll('.sat-btn').forEach(b => b.classList.remove('on'));
+function resetAllFilters() {{
+  // Satellites — all on
+  Object.keys(satActive).forEach(k => satActive[k] = true);
+  document.querySelectorAll('.sat-btn').forEach(b => b.classList.add('on'));
+  // Year slider
   yearLo=YEAR_MIN; yearHi=YEAR_MAX; yearFiltering=false;
   updateSlider();
-  // Reset dates
+  // Dates
   dateLo=''; dateHi='';
   const dlo = document.getElementById('date-lo'), dhi = document.getElementById('date-hi');
-  if (dlo) {{ dateLo=''; dlo.value = dlo.min; }}
-  if (dhi) {{ dateHi=''; dhi.value = dhi.max; }}
-  // Reset cameras
+  if (dlo) dlo.value = dlo.min;
+  if (dhi) dhi.value = dhi.max;
+  // Cameras
   document.querySelectorAll('.cam-btn').forEach(b => {{
     b.classList.add('on');
     cameraActive[b.dataset.ds + '|' + b.dataset.cam] = true;
   }});
-  // Reset missions
+  // Missions
   Object.keys(missionActive).forEach(ds => {{ missionActive[ds] = null; }});
   document.querySelectorAll('.ms-chk').forEach(c => {{ c.checked = true; }});
+  // Search
   searchQ=''; document.getElementById('search').value='';
   buildLayers();
+}}
+document.getElementById('reset-btn').addEventListener('click', resetAllFilters);
+
+// ── Per-dropdown Clear buttons ─────────────────────────────────────────────────
+document.querySelectorAll('.dd-clear').forEach(btn => {{
+  btn.addEventListener('click', e => {{
+    e.stopPropagation();
+    const t = btn.dataset.target;
+    if (t === 'sat') {{
+      Object.keys(satActive).forEach(k => satActive[k] = true);
+      document.querySelectorAll('.sat-btn').forEach(b => b.classList.add('on'));
+      Object.keys(missionActive).forEach(ds => {{ missionActive[ds] = null; }});
+      document.querySelectorAll('.ms-chk').forEach(c => {{ c.checked = true; }});
+    }} else if (t === 'cam') {{
+      document.querySelectorAll('.cam-btn').forEach(b => {{
+        b.classList.add('on');
+        cameraActive[b.dataset.ds + '|' + b.dataset.cam] = true;
+      }});
+    }} else if (t === 'date') {{
+      yearLo=YEAR_MIN; yearHi=YEAR_MAX; yearFiltering=false; updateSlider();
+      dateLo=''; dateHi='';
+      const dlo=document.getElementById('date-lo'), dhi=document.getElementById('date-hi');
+      if (dlo) dlo.value=dlo.min;
+      if (dhi) dhi.value=dhi.max;
+    }} else if (t === 'mission') {{
+      Object.keys(missionActive).forEach(ds => {{ missionActive[ds] = null; }});
+      document.querySelectorAll('.ms-chk').forEach(c => {{ c.checked = true; }});
+    }}
+    buildLayers();
+  }});
 }});
+
+// ── Filter summary bar ────────────────────────────────────────────────────────
+function updateFilterSummary() {{
+  const bar = document.getElementById('filter-summary');
+  const pills = [];
+
+  // Satellites off
+  const offSats = Object.entries(satActive).filter(([,v])=>!v).map(([k])=>k);
+  const allSats = Object.keys(satActive);
+  if (offSats.length > 0 && offSats.length < allSats.length) {{
+    const onSats = allSats.filter(k=>satActive[k]);
+    onSats.forEach(s => {{
+      pills.push(`<span class="fs-pill">${{s}}<button data-action="sat" data-val="${{s}}">×</button></span>`);
+    }});
+  }} else if (offSats.length === allSats.length) {{
+    pills.push(`<span class="fs-pill">No satellites<button data-action="sat-all">×</button></span>`);
+  }}
+
+  // Camera
+  const offCams = Object.entries(cameraActive).filter(([,v])=>!v).map(([k])=>k);
+  offCams.forEach(key => {{
+    const [ds, cam] = key.split('|');
+    const dsShort = {{'corona2':'CORONA','declassii':'GAMBIT','declassiii':'HEXAGON'}}[ds]||ds;
+    pills.push(`<span class="fs-pill">${{dsShort}} ${{cam}}<button data-action="cam" data-val="${{key}}">×</button></span>`);
+  }});
+
+  // Date
+  const dlo = document.getElementById('date-lo'), dhi = document.getElementById('date-hi');
+  if ((dateLo && dateLo !== dlo?.min) || (dateHi && dateHi !== dhi?.max)) {{
+    const lo = dateLo || dlo?.min || '';
+    const hi = dateHi || dhi?.max || '';
+    pills.push(`<span class="fs-pill">${{lo}} → ${{hi}}<button data-action="date">×</button></span>`);
+  }} else if (yearFiltering) {{
+    pills.push(`<span class="fs-pill">${{yearLo}}–${{yearHi}}<button data-action="year">×</button></span>`);
+  }}
+
+  // Missions
+  Object.entries(missionActive).forEach(([ds, ms]) => {{
+    if (ms === null) return;
+    const dsShort = {{'corona2':'CORONA','declassii':'GAMBIT','declassiii':'HEXAGON'}}[ds]||ds;
+    if (ms.size === 0) {{
+      pills.push(`<span class="fs-pill">No ${{dsShort}} missions<button data-action="mission-ds" data-val="${{ds}}">×</button></span>`);
+    }} else {{
+      ms.forEach(m => {{
+        pills.push(`<span class="fs-pill">${{dsShort}} ${{m}}<button data-action="mission" data-ds="${{ds}}" data-val="${{m}}">×</button></span>`);
+      }});
+    }}
+  }});
+
+  if (pills.length === 0) {{
+    bar.innerHTML = '';
+    bar.classList.remove('visible');
+    return;
+  }}
+
+  bar.innerHTML = pills.join('') +
+    `<button class="fs-clear-all" onclick="resetAllFilters()">Clear all</button>`;
+  bar.classList.add('visible');
+
+  // Wire up pill ✕ buttons
+  bar.querySelectorAll('.fs-pill button').forEach(btn => {{
+    btn.addEventListener('click', e => {{
+      e.stopPropagation();
+      const action = btn.dataset.action;
+      if (action === 'sat') {{
+        const s = btn.dataset.val;
+        satActive[s] = false;
+        document.querySelector(`.sat-btn[data-sat="${{s}}"]`)?.classList.remove('on');
+        syncMissionsToSat(s, false);
+      }} else if (action === 'sat-all') {{
+        Object.keys(satActive).forEach(k => satActive[k]=true);
+        document.querySelectorAll('.sat-btn').forEach(b=>b.classList.add('on'));
+        Object.keys(missionActive).forEach(ds=>{{missionActive[ds]=null;}});
+        document.querySelectorAll('.ms-chk').forEach(c=>{{c.checked=true;}});
+      }} else if (action === 'cam') {{
+        const key = btn.dataset.val;
+        cameraActive[key] = true;
+        document.querySelector(`.cam-btn[data-ds="${{key.split('|')[0]}}"][data-cam="${{key.split('|')[1]}}"]`)?.classList.add('on');
+      }} else if (action === 'date') {{
+        dateLo=''; dateHi='';
+        const dlo=document.getElementById('date-lo'), dhi=document.getElementById('date-hi');
+        if (dlo) dlo.value=dlo.min; if (dhi) dhi.value=dhi.max;
+      }} else if (action === 'year') {{
+        yearLo=YEAR_MIN; yearHi=YEAR_MAX; yearFiltering=false; updateSlider();
+      }} else if (action === 'mission') {{
+        const ds=btn.dataset.ds, m=btn.dataset.val;
+        if (missionActive[ds]) missionActive[ds].delete(m);
+        if (missionActive[ds]?.size === (MISSIONS_BY_DS[ds]||[]).length) missionActive[ds]=null;
+        document.querySelector(`.ms-chk[data-ds="${{ds}}"][value="${{m}}"]`).checked = true;
+      }} else if (action === 'mission-ds') {{
+        const ds=btn.dataset.val;
+        missionActive[ds]=null;
+        document.querySelectorAll(`.ms-chk[data-ds="${{ds}}"]`).forEach(c=>{{c.checked=true;}});
+      }}
+      buildLayers();
+    }});
+  }});
+}}
 
 // ── Camera filter ─────────────────────────────────────────────────────────────
 document.querySelectorAll('.cam-btn').forEach(btn => {{
