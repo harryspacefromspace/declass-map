@@ -8,10 +8,7 @@ date range filters. Filters start OFF (additive model — click to show).
 import os
 import json
 import time
-import zipfile
-import urllib.request
 import requests
-from pathlib import Path
 from datetime import datetime
 
 M2M_URL = "https://m2m.cr.usgs.gov/api/api/json/stable/"
@@ -172,6 +169,41 @@ def search_available(api_key, dataset, filter_id):
 # GeoJSON conversion
 # ---------------------------------------------------------------------------
 
+CORONA_CAMERA_LABELS = {
+    'DF': 'Forward', 'DA': 'Aft', 'DV': 'Vertical',
+    'AF': 'Forward', 'AA': 'Aft', 'AV': 'Vertical',
+    'MF': 'Forward', 'MA': 'Aft',
+}
+HEXAGON_CAMERA_LABELS = {'F': 'Forward', 'A': 'Aft'}
+
+def get_camera_from_entity(entity_id, dataset):
+    import re
+    if dataset == "corona2":
+        m = re.match(r'DS\d{6}\d{3}([A-Z]{2})', entity_id)
+        if m:
+            return CORONA_CAMERA_LABELS.get(m.group(1), m.group(1))
+    elif dataset == "declassiii":
+        m = re.match(r'D3C\d+-\d+([AF])', entity_id)
+        if m:
+            return HEXAGON_CAMERA_LABELS.get(m.group(1), m.group(1))
+    return None
+
+def get_mission_from_entity(entity_id, dataset):
+    import re
+    if dataset == "corona2":
+        m = re.match(r'DS(\d{6})', entity_id)
+        if m:
+            # Strip leading zeros for readability: 009031 → 9031
+            return str(int(m.group(1)))
+    elif dataset == "declassii":
+        m = re.match(r'DZB(\d+)-', entity_id)
+        if m: return m.group(1)
+    elif dataset == "declassiii":
+        m = re.match(r'D3C(\d+)-', entity_id)
+        if m: return m.group(1)
+    return None
+
+
 def scene_to_feature(scene, dataset):
     # Prefer spatialCoverage (actual footprint polygon) over spatialBounds (bbox)
     geom = scene.get("spatialCoverage") or scene.get("spatialFootprint") or scene.get("spatialBounds")
@@ -194,8 +226,10 @@ def scene_to_feature(scene, dataset):
     if browse and isinstance(browse, list):
         browse_url = browse[0].get("browsePath") or browse[0].get("thumbnailPath", "")
 
-    mission  = get_mission_from_scene(scene)
+    mission  = get_mission_from_scene(scene) or get_mission_from_entity(entity_id, dataset)
     sat_type = get_satellite_type(mission, dataset)
+    camera   = get_camera_from_entity(entity_id, dataset)
+    mission_num = get_mission_from_entity(entity_id, dataset)
 
     return {
         "type": "Feature",
@@ -208,6 +242,8 @@ def scene_to_feature(scene, dataset):
             "acquisitionDate": acq,
             "year":            year,
             "satellite":       sat_type,
+            "mission":         mission_num,
+            "camera":          camera,
             "browse":          browse_url,
             "color":           DATASET_COLORS.get(dataset, "#ffffff"),
             "earthExplorerUrl": (
@@ -219,168 +255,11 @@ def scene_to_feature(scene, dataset):
 
 
 # ---------------------------------------------------------------------------
-# Natural Earth enrichment
-# ---------------------------------------------------------------------------
-
-NE_BASE = "https://naturalearth.s3.amazonaws.com/10m_cultural"
-NE_GEO  = "https://naturalearth.s3.amazonaws.com/10m_physical"
-NE_DATA_DIR = Path("ne_data")
-
-NE_DATASETS = {
-    "countries": f"{NE_BASE}/ne_10m_admin_0_countries.zip",
-    "places":    f"{NE_BASE}/ne_10m_populated_places.zip",
-    "regions":   f"{NE_GEO}/ne_10m_geography_regions_polys.zip",
-}
-
-_ne_cache = {}
-
-def _download_ne(name, url):
-    out_dir = NE_DATA_DIR / name
-    shp_candidates = list(out_dir.glob("*.shp"))
-    if shp_candidates:
-        return shp_candidates[0]
-    out_dir.mkdir(parents=True, exist_ok=True)
-    zip_path = NE_DATA_DIR / f"{name}.zip"
-    print(f"  Downloading Natural Earth {name}...")
-    urllib.request.urlretrieve(url, zip_path)
-    with zipfile.ZipFile(zip_path) as z:
-        z.extractall(out_dir)
-    zip_path.unlink()
-    return list(out_dir.glob("*.shp"))[0]
-
-def _load_ne():
-    """Load Natural Earth geodataframes, cached after first call."""
-    global _ne_cache
-    if _ne_cache:
-        return _ne_cache
-    try:
-        import geopandas as gpd
-        from shapely.geometry import shape as shapely_shape
-    except ImportError:
-        print("  WARNING: geopandas not installed — skipping place-name enrichment.")
-        print("  Run: pip install geopandas shapely")
-        return None
-
-    countries_shp = _download_ne("countries", NE_DATASETS["countries"])
-    places_shp    = _download_ne("places",    NE_DATASETS["places"])
-    regions_shp   = _download_ne("regions",   NE_DATASETS["regions"])
-
-    countries = gpd.read_file(countries_shp)[["NAME", "geometry"]].rename(columns={"NAME": "country_name"})
-    places    = gpd.read_file(places_shp)[["NAME", "POP_MAX", "ADM0NAME", "geometry"]]
-
-    # Regions shapefile column name varies between NE versions — detect it
-    regions_raw = gpd.read_file(regions_shp)
-    region_name_col = next(
-        (c for c in regions_raw.columns if c.lower() in ("name", "name_en", "region")),
-        None
-    )
-    if region_name_col:
-        regions = regions_raw[[region_name_col, "geometry"]].rename(columns={region_name_col: "region_name"})
-    else:
-        regions = gpd.GeoDataFrame(columns=["region_name", "geometry"])
-
-    for gdf in [countries, places, regions]:
-        if gdf.crs is None or gdf.crs.to_epsg() != 4326:
-            gdf.set_crs(epsg=4326, inplace=True)
-
-    _ne_cache = {
-        "countries":    countries[countries.geometry.notnull()],
-        "major_places": places[places["POP_MAX"] >= 100_000],
-        "all_places":   places[places["POP_MAX"] >= 10_000],
-        "small_places": places[places["POP_MAX"] >= 1_000],
-        "regions":      regions[regions.geometry.notnull()],
-        "shape":        shapely_shape,
-    }
-    return _ne_cache
-
-def _enrich_feature(feat, ne):
-    """Add suggested_title and suggested_tags to a single feature's properties."""
-    geom_raw = feat.get("geometry")
-    if not geom_raw:
-        return
-    try:
-        geom = ne["shape"](geom_raw)
-    except Exception:
-        return
-
-    p    = feat["properties"]
-    year = str(p.get("year") or p.get("acquisitionDate", "")[:4] or "Unknown year")
-
-    # Best city — try progressively smaller thresholds, then nearest to centroid
-    city_name = country_name = None
-    for gdf in [ne["major_places"], ne["all_places"], ne["small_places"]]:
-        hits = gdf[gdf.geometry.within(geom) | gdf.geometry.intersects(geom)]
-        if not hits.empty:
-            best = hits.loc[hits["POP_MAX"].idxmax()]
-            city_name    = best["NAME"]
-            country_name = best["ADM0NAME"]
-            break
-
-    # If still nothing, find nearest city to the centroid (handles ocean/wilderness strips)
-    if not city_name:
-        centroid = geom.centroid
-        gdf = ne["all_places"].copy().to_crs(epsg=3857)
-        centroid_proj = gdf.crs.from_epsg(3857)
-        from shapely.ops import transform
-        import pyproj
-        project = pyproj.Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True).transform
-        centroid_m = transform(project, centroid)
-        if not gdf.empty:
-            gdf["dist"] = gdf.geometry.distance(centroid_m)
-            nearest = gdf.loc[gdf["dist"].idxmin()]
-            # Only use if within ~200km
-            if nearest["dist"] < 200_000:
-                city_name    = nearest["NAME"]
-                country_name = nearest["ADM0NAME"]
-
-    # Countries intersected
-    country_hits = ne["countries"][ne["countries"].geometry.intersects(geom)]
-    countries = sorted(country_hits["country_name"].tolist())
-
-    # Region fallback
-    region_hits = ne["regions"][ne["regions"].geometry.intersects(geom)]
-    regions = sorted(region_hits["region_name"].tolist())
-
-    # Build title
-    if city_name and country_name:
-        title = f"{city_name}, {country_name} — {year}"
-    elif len(countries) == 1:
-        title = f"{countries[0]} — {year}"
-    elif len(countries) == 2:
-        title = f"{countries[0]} & {countries[1]} — {year}"
-    elif len(countries) > 2:
-        title = f"{countries[0]} & {len(countries)-1} more — {year}"
-    elif regions:
-        title = f"{regions[0]} — {year}"
-    else:
-        title = f"Unknown region — {year}"
-
-    # Build tags
-    tags = set(countries) | set(regions)
-    if city_name:
-        tags.add(city_name)
-
-    p["suggested_title"] = title
-    p["suggested_tags"]  = sorted(tags)
-
-def enrich_features(features):
-    """Enrich all features with suggested_title and suggested_tags. Gracefully skips if geopandas unavailable."""
-    print("\nEnriching scenes with place names...")
-    ne = _load_ne()
-    if ne is None:
-        return  # geopandas not available — silently skip
-    enriched = 0
-    for feat in features:
-        _enrich_feature(feat, ne)
-        enriched += 1
-    print(f"  {enriched:,} scenes enriched with place names.")
-
-
-# ---------------------------------------------------------------------------
 # HTML builder
 # ---------------------------------------------------------------------------
 
 def build_html(geojson):
+    import re as _re, collections as _col
     geojson_str    = json.dumps(geojson)
     generated      = geojson["metadata"]["generated"]
     total          = geojson["metadata"]["total"]
@@ -389,6 +268,66 @@ def build_html(geojson):
     year_max       = geojson["metadata"]["year_max"]
     sat_types      = geojson["metadata"]["sat_types"]
     ds_colors_json = json.dumps(DATASET_COLORS)
+
+    # Build mission lists and camera sets from features
+    missions_by_ds = _col.defaultdict(dict)   # {dataset: {mission: count}}
+    cameras_by_ds  = _col.defaultdict(set)    # {dataset: {camera_label}}
+    date_min = date_max = ""
+    for feat in geojson["features"]:
+        p = feat["properties"]
+        ds  = p.get("dataset", "")
+        m   = p.get("mission")
+        cam = p.get("camera")
+        acq = p.get("acquisitionDate", "")[:10]
+        if m:
+            missions_by_ds[ds][m] = missions_by_ds[ds].get(m, 0) + 1
+        if cam:
+            cameras_by_ds[ds].add(cam)
+        if acq:
+            if not date_min or acq < date_min: date_min = acq
+            if not date_max or acq > date_max: date_max = acq
+
+    # Build mission checklist HTML per dataset
+    DS_ORDER = ["corona2", "declassii", "declassiii"]
+    DS_SHORT = {"corona2": "CORONA", "declassii": "GAMBIT", "declassiii": "HEXAGON"}
+    mission_sections_html = ""
+    missions_json = {}
+    for ds in DS_ORDER:
+        ms = missions_by_ds.get(ds, {})
+        if not ms:
+            continue
+        missions_json[ds] = sorted(ms.keys(), key=lambda x: int(x) if x.isdigit() else x)
+        items = "".join(
+            f'<label class="ms-item"><input type="checkbox" class="ms-chk" data-ds="{ds}" value="{m}" checked>'
+            f'<span class="ms-num">{m}</span><span class="ms-count">{c:,}</span></label>'
+            for m, c in sorted(ms.items(), key=lambda x: int(x[0]) if x[0].isdigit() else x[0])
+        )
+        mission_sections_html += (
+            f'<div class="ms-group">'
+            f'<div class="ms-header" data-ds="{ds}">'
+            f'<span class="ms-ds-label">{DS_SHORT[ds]}</span>'
+            f'<button class="ms-all" data-ds="{ds}" data-action="all">All</button>'
+            f'<button class="ms-all" data-ds="{ds}" data-action="none">None</button>'
+            f'</div>'
+            f'<div class="ms-items">{items}</div>'
+            f'</div>'
+        )
+
+    # Camera filter chips — per dataset, only if >1 camera
+    camera_chips_html = ""
+    all_cameras = set()
+    for ds in DS_ORDER:
+        cams = sorted(cameras_by_ds.get(ds, set()))
+        if len(cams) <= 1:
+            continue
+        all_cameras.update(cams)
+        for cam in cams:
+            camera_chips_html += (
+                f'<button class="cam-btn on" data-cam="{cam}" data-ds="{ds}">'
+                f'<span class="cam-ds">{DS_SHORT[ds]}</span>{cam}</button>'
+            )
+
+    missions_json_str = json.dumps(missions_json)
 
     counts_html = " &nbsp;|&nbsp; ".join(
         f'<span class="dot" style="background:{DATASET_COLORS[ds]}"></span>'
@@ -486,6 +425,53 @@ html{{height:100%}}body{{background:#0a0a0a;color:#e0e0e0;font-family:-apple-sys
 .bm-btn.on{{background:#1e1e1e;border-color:#484848;color:#bbb}}
 #reset-btn{{background:transparent;border:1px solid #1e1e1e;color:#2e2e2e;padding:3px 9px;border-radius:4px;cursor:pointer;font-size:10px;transition:all .12s;flex-shrink:0}}
 #reset-btn:hover{{border-color:#444;color:#777}}
+
+/* Camera filter chips */
+.cam-btn{{background:transparent;border:1px solid #1e1e1e;color:#3a3a3a;
+  padding:2px 8px;border-radius:4px;cursor:pointer;font-size:10.5px;
+  transition:all .12s;white-space:nowrap;flex-shrink:0;display:flex;align-items:center;gap:4px}}
+.cam-btn:hover{{border-color:#3a3a3a;color:#888}}
+.cam-btn.on{{background:#1e1e1e;border-color:#484848;color:#bbb}}
+.cam-ds{{font-size:8.5px;color:#444;text-transform:uppercase;letter-spacing:.05em}}
+.cam-btn.on .cam-ds{{color:#666}}
+
+/* Exact date inputs */
+.date-input{{background:#111;border:1px solid #1e1e1e;color:#555;padding:2px 6px;
+  border-radius:4px;font-size:10.5px;outline:none;cursor:pointer;width:96px;
+  color-scheme:dark}}
+.date-input:focus{{border-color:#444;color:#999}}
+.date-sep{{font-size:10px;color:#2e2e2e}}
+
+/* Mission checklist panel */
+#mission-panel{{
+  position:absolute;top:0;left:0;bottom:0;width:240px;
+  background:#0c0c0c;border-right:1px solid #1a1a1a;
+  z-index:900;overflow-y:auto;transform:translateX(-100%);
+  transition:transform .2s ease;padding:10px 0 20px;
+}}
+#mission-panel.open{{transform:translateX(0)}}
+#mission-panel::-webkit-scrollbar{{width:4px}}
+#mission-panel::-webkit-scrollbar-thumb{{background:#222;border-radius:2px}}
+#mission-toggle{{
+  position:absolute;top:12px;left:12px;z-index:1000;
+  background:rgba(10,10,10,.85);backdrop-filter:blur(8px);
+  border:1px solid #242424;color:#555;padding:5px 10px;
+  border-radius:6px;font-size:10.5px;cursor:pointer;transition:all .15s;
+}}
+#mission-toggle:hover{{border-color:#444;color:#aaa}}
+#mission-toggle.open{{border-color:#444;color:#aaa;background:rgba(20,20,20,.95)}}
+.ms-group{{padding:10px 14px 4px}}
+.ms-header{{display:flex;align-items:center;gap:6px;margin-bottom:6px;padding-bottom:6px;border-bottom:1px solid #1a1a1a}}
+.ms-ds-label{{font-size:9px;text-transform:uppercase;letter-spacing:.1em;color:#444;flex:1}}
+.ms-all{{font-size:9px;color:#2a2a2a;cursor:pointer;padding:1px 5px;border-radius:3px;
+  background:none;border:1px solid #1e1e1e;transition:color .12s}}
+.ms-all:hover{{color:#666;border-color:#444}}
+.ms-items{{display:flex;flex-direction:column;gap:1px}}
+.ms-item{{display:flex;align-items:center;gap:6px;padding:3px 4px;border-radius:3px;cursor:pointer}}
+.ms-item:hover{{background:#111}}
+.ms-item input{{accent-color:#555;width:11px;height:11px;cursor:pointer;flex-shrink:0}}
+.ms-num{{font-size:10.5px;color:#555;flex:1;font-variant-numeric:tabular-nums}}
+.ms-count{{font-size:9px;color:#2e2e2e;font-variant-numeric:tabular-nums}}
 
 /* Map */
 #map{{flex:1;position:relative}}
@@ -617,8 +603,7 @@ html{{height:100%}}body{{background:#0a0a0a;color:#e0e0e0;font-family:-apple-sys
 .pu-img{{width:100%;max-height:190px;object-fit:contain;object-position:center;
   border-radius:6px;margin-bottom:10px;display:block;cursor:pointer;background:#0d0d0d;
   border:1px solid #1e1e1e}}
-.pu-place{{font-size:13px;font-weight:600;color:#e8e8e8;margin-bottom:3px;line-height:1.3}}
-.pu h3{{font-size:10px;font-weight:400;color:#444;margin-bottom:6px;font-family:monospace;letter-spacing:.03em;line-height:1.4}}
+.pu h3{{font-size:11.5px;font-weight:600;color:#e8e8e8;margin-bottom:6px;font-family:monospace;letter-spacing:.03em;line-height:1.4}}
 .pu-tags{{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:8px}}
 .pu-tag{{font-size:9.5px;padding:2px 7px;border-radius:3px;border:1px solid #222;color:#777;background:#111}}
 .pu-tag.sat{{color:#aaa;border-color:#2e2e2e}}
@@ -667,6 +652,18 @@ html{{height:100%}}body{{background:#0a0a0a;color:#e0e0e0;font-family:-apple-sys
   </div>
 
   <div class="filter-section">
+    <span class="filter-label">Camera</span>
+    {camera_chips_html}
+  </div>
+
+  <div class="filter-section">
+    <span class="filter-label">Date</span>
+    <input type="date" class="date-input" id="date-lo" value="{date_min}" min="{date_min}" max="{date_max}">
+    <span class="date-sep">→</span>
+    <input type="date" class="date-input" id="date-hi" value="{date_max}" min="{date_min}" max="{date_max}">
+  </div>
+
+  <div class="filter-section">
     <span class="filter-label">Years</span>
     <span class="yr-val" id="yr-lo">{year_min}</span>
     <div class="slider-wrap" id="slider-wrap">
@@ -695,6 +692,12 @@ html{{height:100%}}body{{background:#0a0a0a;color:#e0e0e0;font-family:-apple-sys
   <div id="empty-state">
     <p>No scenes selected</p>
     <small>Choose a satellite type above to show footprints</small>
+  </div>
+
+  <!-- Mission filter panel -->
+  <button id="mission-toggle">Missions</button>
+  <div id="mission-panel">
+    {mission_sections_html}
   </div>
 
   <div id="counter">0 of {total:,} scenes</div>
@@ -781,7 +784,19 @@ setTimeout(() => map.invalidateSize(), 100);
 const satActive = {{}};
 document.querySelectorAll('.sat-btn').forEach(b => satActive[b.dataset.sat] = false);
 
+const MISSIONS_BY_DS = {missions_json_str};
 let yearLo = YEAR_MIN, yearHi = YEAR_MAX, yearFiltering = false, searchQ = '';
+let dateLo = '', dateHi = '';
+
+// Mission state: null = all on, Set = only these missions active
+const missionActive = {{}};
+Object.keys(MISSIONS_BY_DS).forEach(ds => {{ missionActive[ds] = null; }});
+
+// Camera state keyed by "dataset|camera"
+const cameraActive = {{}};
+document.querySelectorAll('.cam-btn').forEach(b => {{
+  cameraActive[b.dataset.ds + '|' + b.dataset.cam] = true;
+}});
 
 function anySatOn() {{ return Object.values(satActive).some(Boolean); }}
 
@@ -810,7 +825,26 @@ function buildLayers() {{
   const feats = GEOJSON.features.filter(f => {{
     const p = f.properties;
     if (!satActive[p.satellite]) return false;
+
+    // Year slider
     if (yearFiltering && p.year !== null && (p.year < yearLo || p.year > yearHi)) return false;
+
+    // Exact date range
+    const acq = (p.acquisitionDate || '').slice(0, 10);
+    if (dateLo && acq && acq < dateLo) return false;
+    if (dateHi && acq && acq > dateHi) return false;
+
+    // Mission filter
+    const ms = missionActive[p.dataset];
+    if (ms !== null && p.mission && !ms.has(p.mission)) return false;
+
+    // Camera filter
+    if (p.camera) {{
+      const key = p.dataset + '|' + p.camera;
+      if (key in cameraActive && cameraActive[key] === false) return false;
+    }}
+
+    // Search
     if (searchQ) {{
       const q = searchQ.toLowerCase();
       if (!p.entityId.toLowerCase().includes(q) && !(p.displayId||'').toLowerCase().includes(q)) return false;
@@ -818,7 +852,6 @@ function buildLayers() {{
     return true;
   }});
 
-  // Group by dataset for colour coding
   const byDs = {{}};
   feats.forEach(f => {{
     const ds = f.properties.dataset;
@@ -915,13 +948,8 @@ function renderPopup() {{
       <button id="pu-next" ${{puIdx===puFeats.length-1?'disabled':''}}>Next →</button>
     </div>` : '';
 
-  const placeHtml = p.suggested_title
-    ? `<div class="pu-place">${{p.suggested_title}}</div>`
-    : '';
-
   popup.setContent(`<div class="pu">
     ${{imgHtml}}
-    ${{placeHtml}}
     <h3>${{p.entityId}}</h3>
     <div class="pu-tags">
       <span class="pu-tag sat">${{p.satellite}}</span>
@@ -1051,8 +1079,81 @@ document.getElementById('reset-btn').addEventListener('click', () => {{
   document.querySelectorAll('.sat-btn').forEach(b => b.classList.remove('on'));
   yearLo=YEAR_MIN; yearHi=YEAR_MAX; yearFiltering=false;
   updateSlider();
+  // Reset dates
+  dateLo=''; dateHi='';
+  const dlo = document.getElementById('date-lo'), dhi = document.getElementById('date-hi');
+  if (dlo) {{ dateLo=''; dlo.value = dlo.min; }}
+  if (dhi) {{ dateHi=''; dhi.value = dhi.max; }}
+  // Reset cameras
+  document.querySelectorAll('.cam-btn').forEach(b => {{
+    b.classList.add('on');
+    cameraActive[b.dataset.ds + '|' + b.dataset.cam] = true;
+  }});
+  // Reset missions
+  Object.keys(missionActive).forEach(ds => {{ missionActive[ds] = null; }});
+  document.querySelectorAll('.ms-chk').forEach(c => {{ c.checked = true; }});
   searchQ=''; document.getElementById('search').value='';
   buildLayers();
+}});
+
+// ── Camera filter ─────────────────────────────────────────────────────────────
+document.querySelectorAll('.cam-btn').forEach(btn => {{
+  btn.addEventListener('click', () => {{
+    const key = btn.dataset.ds + '|' + btn.dataset.cam;
+    cameraActive[key] = !cameraActive[key];
+    btn.classList.toggle('on', cameraActive[key]);
+    buildLayers();
+  }});
+}});
+
+// ── Exact date filter ─────────────────────────────────────────────────────────
+document.getElementById('date-lo').addEventListener('change', e => {{
+  dateLo = e.target.value;
+  // Keep year slider in sync
+  if (dateLo) {{
+    const y = parseInt(dateLo.slice(0,4));
+    if (y > yearLo) {{ yearLo = Math.min(y, yearHi); updateSlider(); }}
+  }}
+  buildLayers();
+}});
+document.getElementById('date-hi').addEventListener('change', e => {{
+  dateHi = e.target.value;
+  if (dateHi) {{
+    const y = parseInt(dateHi.slice(0,4));
+    if (y < yearHi) {{ yearHi = Math.max(y, yearLo); updateSlider(); }}
+  }}
+  buildLayers();
+}});
+
+// ── Mission panel ─────────────────────────────────────────────────────────────
+document.getElementById('mission-toggle').addEventListener('click', () => {{
+  const panel = document.getElementById('mission-panel');
+  const btn   = document.getElementById('mission-toggle');
+  panel.classList.toggle('open');
+  btn.classList.toggle('open');
+}});
+
+// Mission checkboxes
+document.querySelectorAll('.ms-chk').forEach(chk => {{
+  chk.addEventListener('change', () => {{
+    const ds = chk.dataset.ds;
+    const checked = [...document.querySelectorAll(`.ms-chk[data-ds="${{ds}}"]`)]
+      .filter(c => c.checked).map(c => c.value);
+    const all = MISSIONS_BY_DS[ds] || [];
+    missionActive[ds] = checked.length === all.length ? null : new Set(checked);
+    buildLayers();
+  }});
+}});
+
+// Mission all/none buttons
+document.querySelectorAll('.ms-all').forEach(btn => {{
+  btn.addEventListener('click', () => {{
+    const ds     = btn.dataset.ds;
+    const all    = btn.dataset.action === 'all';
+    document.querySelectorAll(`.ms-chk[data-ds="${{ds}}"]`).forEach(c => {{ c.checked = all; }});
+    missionActive[ds] = all ? null : new Set();
+    buildLayers();
+  }});
 }});
 
 // ── Basemap ───────────────────────────────────────────────────────────────────
@@ -1523,8 +1624,6 @@ def main():
     print(f"Year range: {geojson['metadata']['year_min']}–{geojson['metadata']['year_max']}")
     print(f"Satellite types: {sat_seen}")
 
-    enrich_features(geojson["features"])
-
     with open("index.html", "w", encoding="utf-8") as f:
         f.write(build_html(geojson))
     print("Saved index.html")
@@ -1550,7 +1649,6 @@ def build_only(geojson_path="available_scenes.geojson"):
         geojson = json.load(f)
     n = len(geojson.get("features", []))
     print(f"  {n:,} features loaded")
-    enrich_features(geojson["features"])
     with open("index.html", "w", encoding="utf-8") as f:
         f.write(build_html(geojson))
     print("Saved index.html")
