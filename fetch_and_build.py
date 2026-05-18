@@ -710,20 +710,13 @@ html{{height:100%}}body{{background:#0a0a0a;color:#e0e0e0;font-family:-apple-sys
   </div>
 
   <!-- Basemap dropdown -->
-  <button class="tb-btn" id="tb-bm">Basemap <span class="tb-caret">▾</span></button>
-  <div class="dd-panel" id="dd-bm">
-    <div class="dd-inner">
-      <div class="dd-label">Map style</div>
-      <div class="dd-chips">
-        <button class="bm-btn on" data-bm="dark">Dark</button>
-        <button class="bm-btn" data-bm="satellite">Satellite</button>
-        <button class="bm-btn" data-bm="hybrid">Hybrid</button>
-        <button class="bm-btn" data-bm="osm">OSM</button>
-      </div>
-    </div>
-  </div>
-
   <button id="reset-btn">Reset</button>
+  <div style="margin-left:auto;display:flex;align-items:center;gap:5px">
+    <button class="bm-btn on" data-bm="dark">Dark</button>
+    <button class="bm-btn" data-bm="satellite">Satellite</button>
+    <button class="bm-btn" data-bm="hybrid">Hybrid</button>
+    <button class="bm-btn" data-bm="osm">OSM</button>
+  </div>
 </div>
 
 <div id="map">
@@ -1163,7 +1156,6 @@ const DD_PAIRS = [
   ['tb-cam',     'dd-cam'],
   ['tb-date',    'dd-date'],
   ['tb-mission', 'dd-mission'],
-  ['tb-bm',      'dd-bm'],
 ];
 
 function closeAllDropdowns(except) {{
@@ -1182,10 +1174,15 @@ DD_PAIRS.forEach(([btnId, panelId]) => {{
     const opening = !panel.classList.contains('open');
     closeAllDropdowns(null);
     if (opening) {{
-      // Position panel so it doesn't overflow right edge
-      const br = btn.getBoundingClientRect();
-      const pw = panel.offsetWidth || 260;
-      const left = Math.min(br.left, window.innerWidth - pw - 16);
+      // Position relative to #filters, clamped so panel doesn't overflow right edge
+      const filtersEl = document.getElementById('filters');
+      const filtersRect = filtersEl.getBoundingClientRect();
+      const btnRect = btn.getBoundingClientRect();
+      const panelWidth = 280;
+      let left = btnRect.left - filtersRect.left;
+      if (left + panelWidth > filtersRect.width) {{
+        left = filtersRect.width - panelWidth;
+      }}
       panel.style.left = Math.max(0, left) + 'px';
       btn.classList.add('active');
       panel.classList.add('open');
