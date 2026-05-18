@@ -303,7 +303,7 @@ def build_html(geojson):
             for m, c in sorted(ms.items(), key=lambda x: int(x[0]) if x[0].isdigit() else x[0])
         )
         mission_sections_html += (
-            f'<div class="ms-group">'
+            f'<div class="ms-group" data-ds="{ds}">'
             f'<div class="ms-header" data-ds="{ds}">'
             f'<span class="ms-ds-label">{DS_SHORT[ds]}</span>'
             f'<button class="ms-all" data-ds="{ds}" data-action="all">All</button>'
@@ -901,6 +901,13 @@ setTimeout(() => map.invalidateSize(), 100);
 // ── Filter state ──────────────────────────────────────────────────────────────
 const SAT_MISSION_MAP = {sat_mission_map_str};
 const MISSION_DATES   = {mission_dates_str};
+const SAT_DS = {{
+  "KH-1":"corona2","KH-2":"corona2","KH-3":"corona2",
+  "KH-4":"corona2","KH-4A":"corona2","KH-4B":"corona2",
+  "KH-5 (ARGON)":"corona2","KH-6 (LANYARD)":"corona2",
+  "KH-7 (GAMBIT)":"declassii",
+  "KH-9 (HEXAGON)":"declassiii","KH-9 Mapping Camera":"declassiii"
+}};
 const satActive = {{}};
 // All satellites ON by default
 document.querySelectorAll('.sat-btn').forEach(b => {{
@@ -1448,23 +1455,46 @@ document.querySelectorAll('.dd-panel').forEach(p =>
 
 // Update toolbar button state to reflect active filters
 function updateToolbarState() {{
-  // Satellite
+  // Which datasets have at least one active satellite?
+  const activeDsSet = new Set(
+    Object.entries(satActive).filter(([,v])=>v).map(([k])=>SAT_DS[k]).filter(Boolean)
+  );
+
+  // Show/hide camera chips by dataset
+  let anyCamVisible = false;
+  document.querySelectorAll('.cam-btn').forEach(b => {{
+    const visible = activeDsSet.has(b.dataset.ds);
+    b.style.display = visible ? '' : 'none';
+    if (visible) anyCamVisible = true;
+  }});
+  document.getElementById('tb-cam').style.display = anyCamVisible ? '' : 'none';
+
+  // Show/hide mission groups by dataset
+  let anyMissionVisible = false;
+  document.querySelectorAll('.ms-group').forEach(g => {{
+    const ds = g.querySelector('.ms-header')?.dataset.ds;
+    const visible = ds && activeDsSet.has(ds);
+    g.style.display = visible ? '' : 'none';
+    if (visible) anyMissionVisible = true;
+  }});
+  document.getElementById('tb-mission').style.display = anyMissionVisible ? '' : 'none';
+
+  // Toolbar has-filter states
   const anySat = Object.values(satActive).some(Boolean);
   const allSat = Object.values(satActive).every(Boolean);
   document.getElementById('tb-sat').classList.toggle('has-filter', anySat && !allSat);
 
-  // Camera — has-filter if any cam is off
-  const camOff = Object.values(cameraActive).some(v => v === false);
+  const camOff = Object.entries(cameraActive)
+    .some(([key, v]) => !v && activeDsSet.has(key.split('|')[0]));
   document.getElementById('tb-cam').classList.toggle('has-filter', camOff);
 
-  // Date
   const dateFiltered = (dateLo && dateLo !== document.getElementById('date-lo').min) ||
                        (dateHi && dateHi !== document.getElementById('date-hi').max) ||
                        yearFiltering;
   document.getElementById('tb-date').classList.toggle('has-filter', dateFiltered);
 
-  // Missions
-  const missionFiltered = Object.values(missionActive).some(v => v !== null);
+  const missionFiltered = Object.entries(missionActive)
+    .some(([ds, ms]) => ms !== null && activeDsSet.has(ds));
   document.getElementById('tb-mission').classList.toggle('has-filter', missionFiltered);
 }}
 
