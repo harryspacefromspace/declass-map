@@ -269,9 +269,10 @@ def build_html(geojson):
     sat_types      = geojson["metadata"]["sat_types"]
     ds_colors_json = json.dumps(DATASET_COLORS)
 
-    # Build mission lists and camera sets from features
+    # Build mission lists, camera sets, and year counts from features
     missions_by_ds = _col.defaultdict(dict)   # {dataset: {mission: count}}
     cameras_by_ds  = _col.defaultdict(set)    # {dataset: {camera_label}}
+    year_counts     = _col.defaultdict(int)   # {year: count}
     date_min = date_max = ""
     for feat in geojson["features"]:
         p = feat["properties"]
@@ -279,13 +280,19 @@ def build_html(geojson):
         m   = p.get("mission")
         cam = p.get("camera")
         acq = p.get("acquisitionDate", "")[:10]
+        yr  = p.get("year")
         if m:
             missions_by_ds[ds][m] = missions_by_ds[ds].get(m, 0) + 1
         if cam:
             cameras_by_ds[ds].add(cam)
+        if yr:
+            year_counts[yr] += 1
         if acq:
             if not date_min or acq < date_min: date_min = acq
             if not date_max or acq > date_max: date_max = acq
+
+    year_counts_json = json.dumps({str(y): year_counts[y]
+                                   for y in range(year_min, year_max + 1)})
 
     # Build mission checklist HTML per dataset
     DS_ORDER = ["corona2", "declassii", "declassiii"]
@@ -502,7 +509,15 @@ body{{
 .date-sep{{font-size:13px;color:#666}}
 .date-row{{display:flex;align-items:center;gap:10px}}
 
-/* Year slider */
+/* Year histogram */
+#yr-histogram{{display:flex;align-items:flex-end;gap:2px;height:48px;margin-bottom:10px;cursor:pointer}}
+.yr-bar{{
+  flex:1;background:#2a2a2a;border-radius:2px 2px 0 0;
+  transition:background .1s;min-height:2px;position:relative;
+}}
+.yr-bar:hover{{background:#42a5f5}}
+.yr-bar.in-range{{background:#1976d2}}
+.yr-bar.in-range:hover{{background:#42a5f5}}
 .yr-val{{font-size:13px;color:#bbb;min-width:36px;text-align:center;font-variant-numeric:tabular-nums;font-weight:500}}
 .slider-wrap{{position:relative;width:200px;height:24px;flex-shrink:0;cursor:pointer;user-select:none}}
 #slider-track{{position:absolute;top:50%;left:0;right:0;height:3px;background:#333;transform:translateY(-50%);border-radius:2px;pointer-events:none}}
@@ -778,6 +793,7 @@ body{{
       </div>
       <hr class="dd-divider">
       <div class="dd-label">Year range</div>
+      <div id="yr-histogram"></div>
       <div class="slider-row">
         <span class="yr-val" id="yr-lo">{year_min}</span>
         <div class="slider-wrap" id="slider-wrap">
@@ -815,7 +831,7 @@ body{{
 <div id="map">
   <div id="empty-state">
     <p>No scenes selected</p>
-    <small>Use the filters above to narrow results</small>
+    <small>Choose a satellite type to show footprints</small>
   </div>
 
   <div id="counter">0 of {total:,} scenes</div>
@@ -864,6 +880,7 @@ const GEOJSON   = {geojson_str};
 const DS_COLORS = {ds_colors_json};
 const YEAR_MIN  = {year_min};
 const YEAR_MAX  = {year_max};
+const YEAR_COUNTS = {year_counts_json};
 
 // ── Leaflet ───────────────────────────────────────────────────────────────────
 const map = L.map('map', {{center:[35,30], zoom:2, preferCanvas:true, zoomControl:true}});
@@ -909,10 +926,9 @@ const SAT_DS = {{
   "KH-9 (HEXAGON)":"declassiii","KH-9 Mapping Camera":"declassiii"
 }};
 const satActive = {{}};
-// All satellites ON by default
+// Nothing selected on load — user picks what they want
 document.querySelectorAll('.sat-btn').forEach(b => {{
-  satActive[b.dataset.sat] = true;
-  b.classList.add('on');
+  satActive[b.dataset.sat] = false;
 }});
 
 const MISSIONS_BY_DS = {missions_json_str};
@@ -1169,6 +1185,34 @@ function sliderPct(v) {{ return (v - YEAR_MIN) / (YEAR_MAX - YEAR_MIN) * 100; }}
 function sliderVal(p) {{ return Math.round(YEAR_MIN + p * (YEAR_MAX - YEAR_MIN)); }}
 function sliderClamp(v, a, b) {{ return Math.max(a, Math.min(b, v)); }}
 
+// ── Year histogram ────────────────────────────────────────────────────────────
+(function buildHistogram() {{
+  const el = document.getElementById('yr-histogram');
+  if (!el) return;
+  const maxCount = Math.max(...Object.values(YEAR_COUNTS));
+  for (let y = YEAR_MIN; y <= YEAR_MAX; y++) {{
+    const count = YEAR_COUNTS[y] || 0;
+    const bar = document.createElement('div');
+    bar.className = 'yr-bar';
+    bar.dataset.year = y;
+    bar.style.height = Math.max(2, Math.round((count / maxCount) * 100)) + '%';
+    bar.title = `${{y}}: ${{count.toLocaleString()}} scenes`;
+    bar.addEventListener('click', () => {{
+      // Click a bar to set yearLo to that year; shift-click to set yearHi
+      yearLo = y; yearHi = y; yearFiltering = true;
+      updateSlider(); buildLayers();
+    }});
+    el.appendChild(bar);
+  }}
+}})();
+
+function updateHistogram() {{
+  document.querySelectorAll('.yr-bar').forEach(bar => {{
+    const y = parseInt(bar.dataset.year);
+    bar.classList.toggle('in-range', y >= yearLo && y <= yearHi);
+  }});
+}}
+
 function updateSlider() {{
   const lp = sliderPct(yearLo), hp = sliderPct(yearHi);
   thumbLo.style.left = lp + '%';
@@ -1179,6 +1223,7 @@ function updateSlider() {{
   document.getElementById('yr-hi').textContent = yearHi;
   const active = yearLo > YEAR_MIN || yearHi < YEAR_MAX;
   fill.classList.toggle('active', active);
+  updateHistogram();
 }}
 
 let sliderDragging = null;
@@ -1316,17 +1361,15 @@ function updateFilterSummary() {{
     pills.push(`<span class="fs-pill">${{yearLo}}–${{yearHi}}<button data-action="year">×</button></span>`);
   }}
 
-  // Missions
+  // Missions — one pill per dataset, never one per mission number
   Object.entries(missionActive).forEach(([ds, ms]) => {{
     if (ms === null) return;
     const dsShort = {{'corona2':'CORONA','declassii':'GAMBIT','declassiii':'HEXAGON'}}[ds]||ds;
-    if (ms.size === 0) {{
-      pills.push(`<span class="fs-pill">No ${{dsShort}} missions<button data-action="mission-ds" data-val="${{ds}}">×</button></span>`);
-    }} else {{
-      ms.forEach(m => {{
-        pills.push(`<span class="fs-pill">${{dsShort}} ${{m}}<button data-action="mission" data-ds="${{ds}}" data-val="${{m}}">×</button></span>`);
-      }});
-    }}
+    const total = (MISSIONS_BY_DS[ds]||[]).length;
+    const label = ms.size === 0
+      ? `No ${{dsShort}} missions`
+      : `${{dsShort}}: ${{ms.size}} of ${{total}} missions`;
+    pills.push(`<span class="fs-pill">${{label}}<button data-action="mission-ds" data-val="${{ds}}">×</button></span>`);
   }});
 
   if (pills.length === 0) {{
@@ -1364,11 +1407,6 @@ function updateFilterSummary() {{
         if (dlo) dlo.value=dlo.min; if (dhi) dhi.value=dhi.max;
       }} else if (action === 'year') {{
         yearLo=YEAR_MIN; yearHi=YEAR_MAX; yearFiltering=false; updateSlider();
-      }} else if (action === 'mission') {{
-        const ds=btn.dataset.ds, m=btn.dataset.val;
-        if (missionActive[ds]) missionActive[ds].delete(m);
-        if (missionActive[ds]?.size === (MISSIONS_BY_DS[ds]||[]).length) missionActive[ds]=null;
-        document.querySelector(`.ms-chk[data-ds="${{ds}}"][value="${{m}}"]`).checked = true;
       }} else if (action === 'mission-ds') {{
         const ds=btn.dataset.val;
         missionActive[ds]=null;
