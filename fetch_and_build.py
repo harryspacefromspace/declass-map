@@ -896,6 +896,7 @@ function buildLayers() {{
 
   visibleFeats = feats;
   updateCounter(feats.length);
+  updateToolbarState();
 }}
 
 function updateCounter(n) {{
@@ -1216,10 +1217,6 @@ function updateToolbarState() {{
   const missionFiltered = Object.values(missionActive).some(v => v !== null);
   document.getElementById('tb-mission').classList.toggle('has-filter', missionFiltered);
 }}
-
-// Patch buildLayers to also update toolbar state
-const _origBuildLayers = buildLayers;
-function buildLayers() {{ _origBuildLayers(); updateToolbarState(); }}
 
 // ── Mission checkboxes
 document.querySelectorAll('.ms-chk').forEach(chk => {{
