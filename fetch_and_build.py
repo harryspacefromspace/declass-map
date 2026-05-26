@@ -165,6 +165,45 @@ def search_available(api_key, dataset, filter_id):
     return all_scenes
 
 
+def search_all(api_key, dataset):
+    """Fetch ALL scenes for a dataset regardless of scan/availability status."""
+    all_scenes = []
+    starting   = 1
+    batch      = 10000
+
+    while True:
+        resp = requests.post(
+            M2M_URL + "scene-search",
+            json={
+                "datasetName":    dataset,
+                "maxResults":     batch,
+                "startingNumber": starting,
+                "metadataType":   "full",
+            },
+            headers={"X-Auth-Token": api_key},
+            timeout=180,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("errorCode"):
+            print(f"    API error: {data['errorMessage']}")
+            break
+
+        scenes = data.get("data", {}).get("results", [])
+        if not scenes:
+            break
+
+        all_scenes.extend(scenes)
+        print(f"    {len(all_scenes):,} scenes retrieved...")
+
+        if len(scenes) < batch:
+            break
+        starting += batch
+        time.sleep(0.5)
+
+    return all_scenes
+
+
 # ---------------------------------------------------------------------------
 # GeoJSON conversion
 # ---------------------------------------------------------------------------
@@ -245,6 +284,7 @@ def scene_to_feature(scene, dataset):
             "mission":         mission_num,
             "camera":          camera,
             "browse":          browse_url,
+            "scanned":         True,
             "color":           DATASET_COLORS.get(dataset, "#ffffff"),
             "earthExplorerUrl": (
                 f"https://earthexplorer.usgs.gov/scene/metadata/full/"
@@ -252,6 +292,19 @@ def scene_to_feature(scene, dataset):
             ),
         },
     }
+
+
+def scene_to_feature_unscanned(scene, dataset, scanned_ids):
+    """Convert a scene to a GeoJSON feature, marking it as unscanned if not in scanned_ids."""
+    f = scene_to_feature(scene, dataset)
+    if f is None:
+        return None
+    entity_id = f["properties"]["entityId"]
+    if entity_id in scanned_ids:
+        return None  # Already included as a scanned feature
+    f["properties"]["scanned"] = False
+    f["properties"]["browse"]  = ""
+    return f
 
 
 # ---------------------------------------------------------------------------
@@ -638,6 +691,20 @@ body{{
 .ov-badge{{margin-left:auto;font-size:11px;color:#666;background:#1e1e1e;padding:2px 7px;border-radius:10px;}}
 .ov-btn.on .ov-badge{{color:#9575cd}}
 
+/* Unscanned toggle */
+#unscanned-toggle{{
+  position:absolute;bottom:56px;right:16px;z-index:1000;
+  background:rgba(18,18,18,.92);backdrop-filter:blur(8px);
+  border:1px solid #2c2c2c;color:#888;padding:7px 14px;
+  border-radius:10px;font-size:12px;cursor:pointer;font-weight:500;
+  transition:all .15s;white-space:nowrap;
+  box-shadow:0 2px 8px rgba(0,0,0,.5);display:flex;align-items:center;gap:7px;
+}}
+#unscanned-toggle:hover{{border-color:#555;color:#ddd;background:#2a2a2a}}
+#unscanned-toggle.on{{border-color:#f57c0088;color:#ffa726;background:#f57c000a}}
+.unscanned-dot{{width:8px;height:8px;border-radius:50%;background:#555;flex-shrink:0;transition:background .2s}}
+#unscanned-toggle.on .unscanned-dot{{background:#ffa726;box-shadow:0 0 6px #ffa72666}}
+
 /* ── USGS status widget ── */
 #usgs-status{{
   position:absolute;bottom:20px;right:16px;z-index:1000;
@@ -733,6 +800,13 @@ body{{
   padding:5px 12px;border:1px solid #42a5f522;border-radius:6px;transition:all .15s;font-weight:500;
 }}
 .pu a:hover{{background:#42a5f512;border-color:#42a5f544}}
+.pu-tag-unscanned{{color:#ffa726;border-color:#ffa72633;background:#ffa7260a}}
+.pu-unscanned-badge{{
+  width:100%;background:#1a1200;border:1px dashed #ffa72633;border-radius:8px;
+  color:#ffa726;font-size:12px;text-align:center;padding:12px;margin-bottom:12px;
+  font-weight:500;letter-spacing:.02em;
+}}
+.pu-unscanned-label{{font-size:11px;color:#888}}
 .leaflet-control-zoom{{border:1px solid #2c2c2c!important;border-radius:8px!important;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.5)!important}}
 .leaflet-control-zoom a{{
   background:#1e1e1e!important;color:#aaa!important;border-color:#2c2c2c!important;
@@ -835,6 +909,12 @@ body{{
   </div>
 
   <div id="counter">0 of {total:,} scenes</div>
+
+  <!-- Unscanned toggle -->
+  <button id="unscanned-toggle">
+    <span class="unscanned-dot"></span>
+    Show unscanned KH-7
+  </button>
 
   <!-- Overlays button -->
   <button id="ov-toggle">
@@ -945,6 +1025,8 @@ document.querySelectorAll('.cam-btn').forEach(b => {{
   cameraActive[b.dataset.ds + '|' + b.dataset.cam] = true;
 }});
 
+let showUnscanned = false;
+
 // ── Layers ────────────────────────────────────────────────────────────────────
 const layers = {{}};
 let visibleFeats = [];
@@ -957,6 +1039,14 @@ function styleHover(ds) {{
   const c = DS_COLORS[ds] || '#fff';
   return {{color:c, weight:2, fillColor:c, fillOpacity:0.42}};
 }}
+function styleUnscanned() {{
+  return {{color:'#ffa726', weight:1, fillColor:'#ffa726', fillOpacity:0.04,
+           dashArray:'4 4'}};
+}}
+function styleUnscannedHover() {{
+  return {{color:'#ffa726', weight:2, fillColor:'#ffa726', fillOpacity:0.15,
+           dashArray:'4 4'}};
+}}
 
 function buildLayers() {{
   Object.values(layers).forEach(l => {{ try {{ map.removeLayer(l); }} catch(e) {{}} }});
@@ -964,6 +1054,12 @@ function buildLayers() {{
 
   const feats = GEOJSON.features.filter(f => {{
     const p = f.properties;
+    // Unscanned: only show if toggle is on, and satellite filter matches
+    if (p.scanned === false) {{
+      if (!showUnscanned) return false;
+      if (!satActive[p.satellite]) return false;
+      return true;  // unscanned skip other filters
+    }}
     if (!satActive[p.satellite]) return false;
 
     // Year slider
@@ -993,10 +1089,15 @@ function buildLayers() {{
   }});
 
   const byDs = {{}};
+  const unscannedFeats = [];
   feats.forEach(f => {{
-    const ds = f.properties.dataset;
-    if (!byDs[ds]) byDs[ds] = [];
-    byDs[ds].push(f);
+    if (f.properties.scanned === false) {{
+      unscannedFeats.push(f);
+    }} else {{
+      const ds = f.properties.dataset;
+      if (!byDs[ds]) byDs[ds] = [];
+      byDs[ds].push(f);
+    }}
   }});
 
   Object.entries(byDs).forEach(([ds, dsFeats]) => {{
@@ -1008,6 +1109,19 @@ function buildLayers() {{
       }}
     }}).addTo(map);
   }});
+
+  // Render unscanned as a separate dimmed dashed layer, underneath scanned
+  if (unscannedFeats.length) {{
+    layers['_unscanned'] = L.geoJSON({{type:'FeatureCollection', features:unscannedFeats}}, {{
+      style: styleUnscanned,
+      onEachFeature: (feat, layer) => {{
+        layer.on('mouseover', () => layer.setStyle(styleUnscannedHover()));
+        layer.on('mouseout',  () => layer.setStyle(styleUnscanned()));
+      }}
+    }}).addTo(map);
+    // Push unscanned below scanned layers
+    layers['_unscanned'].bringToBack();
+  }}
 
   visibleFeats = feats;
   updateCounter(feats.length);
@@ -1080,9 +1194,14 @@ function renderPopup() {{
   const c   = DS_COLORS[p.dataset]||'#fff';
   const date = p.acquisitionDate ? p.acquisitionDate.slice(0,10) : '—';
   const dsShort = p.datasetLabel.split('—')[0].trim();
+  const isUnscanned = p.scanned === false;
+
   const imgHtml = p.browse
     ? `<img class="pu-img" src="${{p.browse}}" onerror="this.style.display='none'" title="Click to view full image" onclick="window.open('${{p.browse}}','_blank')">`
-    : '';
+    : isUnscanned
+      ? `<div class="pu-unscanned-badge">Not yet digitised</div>`
+      : '';
+
   const nav = puFeats.length > 1 ? `
     <div class="pu-nav">
       <button id="pu-prev" ${{puIdx===0?'disabled':''}}>← Prev</button>
@@ -1090,17 +1209,23 @@ function renderPopup() {{
       <button id="pu-next" ${{puIdx===puFeats.length-1?'disabled':''}}>Next →</button>
     </div>` : '';
 
+  const footerActions = isUnscanned
+    ? `<a href="${{p.earthExplorerUrl}}" target="_blank">EarthExplorer ↗</a>
+       <span class="pu-unscanned-label">📷 Film not yet scanned</span>`
+    : `<a href="${{p.earthExplorerUrl}}" target="_blank">EarthExplorer ↗</a>
+       <button class="pu-dl-btn" data-eid="${{p.entityId}}" data-ds="${{p.dataset}}">⬇ Download</button>`;
+
   popup.setContent(`<div class="pu">
     ${{imgHtml}}
     <h3>${{p.entityId}}</h3>
     <div class="pu-tags">
       <span class="pu-tag sat">${{p.satellite}}</span>
       <span class="pu-tag" style="color:${{c}}99;border-color:${{c}}28">${{dsShort}}</span>
+      ${{isUnscanned ? '<span class="pu-tag pu-tag-unscanned">Unscanned</span>' : ''}}
     </div>
     <div class="meta">📅 ${{date}}</div>
     <div class="pu-footer">
-      <a href="${{p.earthExplorerUrl}}" target="_blank">EarthExplorer ↗</a>
-      <button class="pu-dl-btn" data-eid="${{p.entityId}}" data-ds="${{p.dataset}}">⬇ Download</button>
+      ${{footerActions}}
       ${{nav}}
     </div>
   </div>`);
@@ -1804,6 +1929,13 @@ function updateOvToggle() {{
   if (tog) tog.classList.toggle('has-active', Object.keys(ovLayers).length > 0);
 }}
 
+// ── Unscanned toggle ──────────────────────────────────────────────────────────
+document.getElementById('unscanned-toggle').addEventListener('click', () => {{
+  showUnscanned = !showUnscanned;
+  document.getElementById('unscanned-toggle').classList.toggle('on', showUnscanned);
+  buildLayers();
+}});
+
 document.getElementById('ov-toggle').addEventListener('click', () => {{
   const panel = document.getElementById('ov-panel');
   const tog   = document.getElementById('ov-toggle');
@@ -1986,6 +2118,24 @@ def main():
                 else:
                     print(f"  No previous data for {dataset} — skipping")
                 failed.append(dataset)
+
+        # Fetch unscanned KH-7 (declassii) scenes — all scenes minus already-scanned
+        print(f"\n  Declass II — unscanned KH-7 scenes...")
+        try:
+            scanned_ids = {f["properties"]["entityId"]
+                           for f in all_features
+                           if f["properties"]["dataset"] == "declassii"}
+            all_declassii = search_all(api_key, "declassii")
+            unscanned = []
+            for scene in all_declassii:
+                f = scene_to_feature_unscanned(scene, "declassii", scanned_ids)
+                if f:
+                    unscanned.append(f)
+            all_features.extend(unscanned)
+            print(f"  {len(unscanned):,} unscanned KH-7 features added")
+        except Exception as e:
+            print(f"  WARNING: unscanned KH-7 fetch failed — {e}")
+
     finally:
         logout(api_key)
 
