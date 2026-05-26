@@ -303,7 +303,6 @@ def scene_to_feature_unscanned(scene, dataset, scanned_ids):
     if entity_id in scanned_ids:
         return None  # Already included as a scanned feature
     f["properties"]["scanned"] = False
-    f["properties"]["browse"]  = ""
     return f
 
 
@@ -691,19 +690,17 @@ body{{
 .ov-badge{{margin-left:auto;font-size:11px;color:#666;background:#1e1e1e;padding:2px 7px;border-radius:10px;}}
 .ov-btn.on .ov-badge{{color:#9575cd}}
 
-/* Unscanned toggle */
+/* Unscanned toggle — toolbar variant */
 #unscanned-toggle{{
-  position:absolute;bottom:56px;right:16px;z-index:1000;
-  background:rgba(18,18,18,.92);backdrop-filter:blur(8px);
-  border:1px solid #2c2c2c;color:#888;padding:7px 14px;
-  border-radius:10px;font-size:12px;cursor:pointer;font-weight:500;
-  transition:all .15s;white-space:nowrap;
-  box-shadow:0 2px 8px rgba(0,0,0,.5);display:flex;align-items:center;gap:7px;
+  display:flex;align-items:center;gap:6px;
+  background:#2a2a2a;border:1px solid #3a3a3a;color:#bbb;
+  padding:7px 14px;border-radius:8px;cursor:pointer;font-size:13px;
+  transition:all .15s;white-space:nowrap;flex-shrink:0;font-weight:500;
 }}
-#unscanned-toggle:hover{{border-color:#555;color:#ddd;background:#2a2a2a}}
-#unscanned-toggle.on{{border-color:#f57c0088;color:#ffa726;background:#f57c000a}}
-.unscanned-dot{{width:8px;height:8px;border-radius:50%;background:#555;flex-shrink:0;transition:background .2s}}
-#unscanned-toggle.on .unscanned-dot{{background:#ffa726;box-shadow:0 0 6px #ffa72666}}
+#unscanned-toggle:hover{{background:#333;border-color:#555;color:#fff}}
+#unscanned-toggle.on{{background:#1a1100;border-color:#f57c0088;color:#ffa726}}
+.unscanned-dot{{width:7px;height:7px;border-radius:50%;background:#444;flex-shrink:0;transition:all .2s}}
+#unscanned-toggle.on .unscanned-dot{{background:#ffa726;box-shadow:0 0 5px #ffa72688}}
 
 /* ── USGS status widget ── */
 #usgs-status{{
@@ -890,6 +887,12 @@ body{{
     </div>
   </div>
 
+  <!-- Unscanned toggle -->
+  <button id="unscanned-toggle">
+    <span class="unscanned-dot"></span>
+    All scenes
+  </button>
+
   <!-- Basemap dropdown -->
   <button id="reset-btn">Reset</button>
   <div style="margin-left:auto;display:flex;align-items:center;gap:5px">
@@ -909,12 +912,6 @@ body{{
   </div>
 
   <div id="counter">0 of {total:,} scenes</div>
-
-  <!-- Unscanned toggle -->
-  <button id="unscanned-toggle">
-    <span class="unscanned-dot"></span>
-    Show unscanned KH-7
-  </button>
 
   <!-- Overlays button -->
   <button id="ov-toggle">
@@ -1199,7 +1196,7 @@ function renderPopup() {{
   const imgHtml = p.browse
     ? `<img class="pu-img" src="${{p.browse}}" onerror="this.style.display='none'" title="Click to view full image" onclick="window.open('${{p.browse}}','_blank')">`
     : isUnscanned
-      ? `<div class="pu-unscanned-badge">Not yet digitised</div>`
+      ? `<div class="pu-unscanned-badge">No preview available</div>`
       : '';
 
   const nav = puFeats.length > 1 ? `
@@ -1932,7 +1929,9 @@ function updateOvToggle() {{
 // ── Unscanned toggle ──────────────────────────────────────────────────────────
 document.getElementById('unscanned-toggle').addEventListener('click', () => {{
   showUnscanned = !showUnscanned;
-  document.getElementById('unscanned-toggle').classList.toggle('on', showUnscanned);
+  const btn = document.getElementById('unscanned-toggle');
+  btn.classList.toggle('on', showUnscanned);
+  btn.childNodes[2].textContent = showUnscanned ? 'Scanned only' : 'All scenes';
   buildLayers();
 }});
 
