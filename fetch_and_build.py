@@ -1000,7 +1000,8 @@ const SAT_DS = {{
   "KH-4":"corona2","KH-4A":"corona2","KH-4B":"corona2",
   "KH-5 (ARGON)":"corona2","KH-6 (LANYARD)":"corona2",
   "KH-7 (GAMBIT)":"declassii",
-  "KH-9 (HEXAGON)":"declassiii","KH-9 Mapping Camera":"declassiii"
+  "KH-9 Mapping Camera":"declassii",
+  "KH-9 (HEXAGON)":"declassiii"
 }};
 const satActive = {{}};
 // Nothing selected on load — user picks what they want
@@ -1629,13 +1630,31 @@ function updateToolbarState() {{
   }});
   document.getElementById('tb-cam').style.display = anyCamVisible ? '' : 'none';
 
-  // Show/hide mission groups by dataset
+  // Show/hide mission groups AND individual missions by active satellites
+  const activeSats = new Set(Object.entries(satActive).filter(([,v])=>v).map(([k])=>k));
+
   let anyMissionVisible = false;
   document.querySelectorAll('.ms-group').forEach(g => {{
-    const ds = g.querySelector('.ms-header')?.dataset.ds;
-    const visible = ds && activeDsSet.has(ds);
-    g.style.display = visible ? '' : 'none';
-    if (visible) anyMissionVisible = true;
+    const ds = g.dataset.ds;
+    if (!activeDsSet.has(ds)) {{
+      g.style.display = 'none';
+      return;
+    }}
+    // Within the group, show only missions belonging to an active satellite
+    let anyItemVisible = false;
+    g.querySelectorAll('.ms-item').forEach(item => {{
+      const chk = item.querySelector('.ms-chk');
+      const mission = chk?.value;
+      // Check if this mission belongs to any active satellite
+      const missionBelongsToActiveSat = [...activeSats].some(sat => {{
+        const satMissions = SAT_MISSION_MAP[sat] || [];
+        return satMissions.includes(mission);
+      }});
+      item.style.display = missionBelongsToActiveSat ? '' : 'none';
+      if (missionBelongsToActiveSat) anyItemVisible = true;
+    }});
+    g.style.display = anyItemVisible ? '' : 'none';
+    if (anyItemVisible) anyMissionVisible = true;
   }});
   document.getElementById('tb-mission').style.display = anyMissionVisible ? '' : 'none';
 
