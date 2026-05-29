@@ -690,7 +690,17 @@ body{{
 .ov-badge{{margin-left:auto;font-size:11px;color:#666;background:#1e1e1e;padding:2px 7px;border-radius:10px;}}
 .ov-btn.on .ov-badge{{color:#9575cd}}
 
-/* Unscanned toggle — toolbar variant */
+/* Published toggle — toolbar variant */
+#published-toggle{{
+  display:flex;align-items:center;gap:6px;
+  background:#2a2a2a;border:1px solid #3a3a3a;color:#bbb;
+  padding:7px 14px;border-radius:8px;cursor:pointer;font-size:13px;
+  transition:all .15s;white-space:nowrap;flex-shrink:0;font-weight:500;
+}}
+#published-toggle:hover{{background:#333;border-color:#555;color:#fff}}
+#published-toggle.on{{background:#0d2018;border-color:#66bb6a88;color:#66bb6a}}
+.published-dot{{width:7px;height:7px;border-radius:50%;background:#444;flex-shrink:0;transition:all .2s}}
+#published-toggle.on .published-dot{{background:#66bb6a;box-shadow:0 0 5px #66bb6a88}}
 #unscanned-toggle{{
   display:flex;align-items:center;gap:6px;
   background:#2a2a2a;border:1px solid #3a3a3a;color:#bbb;
@@ -798,6 +808,7 @@ body{{
 }}
 .pu a:hover{{background:#42a5f512;border-color:#42a5f544}}
 .pu-tag-unscanned{{color:#ffa726;border-color:#ffa72633;background:#ffa7260a}}
+.pu-tag-published{{color:#66bb6a;border-color:#66bb6a33;background:#66bb6a0a}}
 .pu-unscanned-badge{{
   width:100%;background:#1a1200;border:1px dashed #ffa72633;border-radius:8px;
   color:#ffa726;font-size:12px;text-align:center;padding:12px;margin-bottom:12px;
@@ -891,6 +902,12 @@ body{{
   <button id="unscanned-toggle">
     <span class="unscanned-dot"></span>
     All scenes
+  </button>
+
+  <!-- Published toggle -->
+  <button id="published-toggle">
+    <span class="published-dot"></span>
+    Hide published
   </button>
 
   <!-- Basemap dropdown -->
@@ -1024,6 +1041,7 @@ document.querySelectorAll('.cam-btn').forEach(b => {{
 }});
 
 let showUnscanned = false;
+let hidePublished = false;
 
 // ── Layers ────────────────────────────────────────────────────────────────────
 const layers = {{}};
@@ -1058,6 +1076,9 @@ function buildLayers() {{
       if (!satActive[p.satellite]) return false;
       return true;  // unscanned skip other filters
     }}
+
+    // Hide published scenes if toggle is on
+    if (hidePublished && p.published) return false;
     if (!satActive[p.satellite]) return false;
 
     // Year slider
@@ -1220,6 +1241,7 @@ function renderPopup() {{
       <span class="pu-tag sat">${{p.satellite}}</span>
       <span class="pu-tag" style="color:${{c}}99;border-color:${{c}}28">${{dsShort}}</span>
       ${{isUnscanned ? '<span class="pu-tag pu-tag-unscanned">Unscanned</span>' : ''}}
+      ${{p.published ? '<span class="pu-tag pu-tag-published">✓ On SFS</span>' : ''}}
     </div>
     <div class="meta">📅 ${{date}}</div>
     <div class="pu-footer">
@@ -1945,6 +1967,15 @@ function updateOvToggle() {{
   if (tog) tog.classList.toggle('has-active', Object.keys(ovLayers).length > 0);
 }}
 
+// ── Published toggle ──────────────────────────────────────────────────────────
+document.getElementById('published-toggle').addEventListener('click', () => {{
+  hidePublished = !hidePublished;
+  const btn = document.getElementById('published-toggle');
+  btn.classList.toggle('on', hidePublished);
+  btn.childNodes[2].textContent = hidePublished ? 'Show published' : 'Hide published';
+  buildLayers();
+}});
+
 // ── Unscanned toggle ──────────────────────────────────────────────────────────
 document.getElementById('unscanned-toggle').addEventListener('click', () => {{
   showUnscanned = !showUnscanned;
@@ -2081,6 +2112,28 @@ setInterval(checkUsgsStatus, 60_000);
 # Main
 # ---------------------------------------------------------------------------
 
+SFS_FOOTPRINTS_URL = "https://raw.githubusercontent.com/harryspacefromspace/sfs-map-data/main/declassified_footprints.geojson"
+
+def fetch_published_ids():
+    """Fetch entity IDs already published on SpaceFromSpace."""
+    try:
+        resp = requests.get(SFS_FOOTPRINTS_URL, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        ids = set()
+        for feat in data.get("features", []):
+            p = feat.get("properties", {})
+            eid = p.get("entity_id") or p.get("entityId") or p.get("imageId") or ""
+            if eid:
+                # Normalise: uppercase, strip hyphens for fuzzy matching
+                ids.add(eid.upper().replace("-", ""))
+        print(f"  Loaded {len(ids):,} published scene IDs from SpaceFromSpace")
+        return ids
+    except Exception as e:
+        print(f"  WARNING: could not fetch SFS published IDs — {e}")
+        return set()
+
+
 def load_previous_features(path="available_scenes.geojson"):
     """Load features from the last successful run, grouped by dataset."""
     if not os.path.exists(path):
@@ -2105,6 +2158,10 @@ def main():
     token    = os.environ.get("M2M_TOKEN")
     if not username or not token:
         raise RuntimeError("M2M_USERNAME and M2M_TOKEN must be set")
+
+    # Load published scene IDs from SpaceFromSpace
+    print("Fetching published scene IDs from SpaceFromSpace...")
+    published_ids = fetch_published_ids()
 
     # Load previous run's features before we start, so we can fall back per-dataset
     print("Loading previous run as fallback...")
@@ -2162,6 +2219,16 @@ def main():
 
     if failed:
         print(f"\nWARNING: {len(failed)} dataset(s) used fallback data: {', '.join(failed)}")
+
+    # Stamp published property — normalise entity ID same way as fetch_published_ids
+    published_count = 0
+    for f in all_features:
+        eid = f["properties"].get("entityId", "").upper().replace("-", "")
+        is_published = eid in published_ids
+        f["properties"]["published"] = is_published
+        if is_published:
+            published_count += 1
+    print(f"  {published_count:,} scenes marked as published on SpaceFromSpace")
 
     counts    = {}
     years     = []
