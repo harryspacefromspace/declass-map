@@ -1029,6 +1029,7 @@ document.querySelectorAll('.sat-btn').forEach(b => {{
 const MISSIONS_BY_DS = {missions_json_str};
 let yearLo = YEAR_MIN, yearHi = YEAR_MAX, yearFiltering = false, searchQ = '';
 let dateLo = '', dateHi = '';
+let filterMMDD = ''; // MM-DD only filter (ignores year)
 
 // Mission state: null = all on, Set = only these missions active
 const missionActive = {{}};
@@ -1088,6 +1089,9 @@ function buildLayers() {{
     const acq = (p.acquisitionDate || '').slice(0, 10);
     if (dateLo && acq && acq < dateLo) return false;
     if (dateHi && acq && acq > dateHi) return false;
+
+    // Month-day only filter (cross-year)
+    if (filterMMDD && acq && acq.slice(5) !== filterMMDD) return false;
 
     // Mission filter
     const ms = missionActive[p.dataset];
@@ -2108,7 +2112,22 @@ setInterval(checkUsgsStatus, 60_000);
 (function() {{
   const params = new URLSearchParams(window.location.search);
   const from = params.get('from');
-  const to   = params.get('to') || params.get('from'); // single date: set both
+  const to   = params.get('to') || params.get('from');
+  const mmdd = params.get('mmdd'); // MM-DD only filter e.g. ?mmdd=07-13
+
+  if (mmdd && /^\d{{2}}-\d{{2}}$/.test(mmdd)) {{
+    filterMMDD = mmdd;
+    buildLayers();
+    // Open date dropdown so user can see something is active
+    const tbDate = document.getElementById('tb-date');
+    const ddDate = document.getElementById('dd-date');
+    if (tbDate && ddDate) {{
+      tbDate.classList.add('active');
+      ddDate.classList.add('open');
+    }}
+    return;
+  }}
+
   if (!from) return;
   const dlo = document.getElementById('date-lo');
   const dhi = document.getElementById('date-hi');
@@ -2120,7 +2139,6 @@ setInterval(checkUsgsStatus, 60_000);
     dhi.value = to;
     dhi.dispatchEvent(new Event('change'));
   }}
-  // Open the date dropdown so the user can see the filter
   const tbDate = document.getElementById('tb-date');
   const ddDate = document.getElementById('dd-date');
   if (tbDate && ddDate) {{
