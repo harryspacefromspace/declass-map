@@ -2103,6 +2103,31 @@ async function checkUsgsStatus() {{
 }}
 checkUsgsStatus();
 setInterval(checkUsgsStatus, 60_000);
+
+// ── URL param date filter ──────────────────────────────────────────────────────
+(function() {{
+  const params = new URLSearchParams(window.location.search);
+  const from = params.get('from');
+  const to   = params.get('to') || params.get('from'); // single date: set both
+  if (!from) return;
+  const dlo = document.getElementById('date-lo');
+  const dhi = document.getElementById('date-hi');
+  if (dlo && from >= dlo.min && from <= dlo.max) {{
+    dlo.value = from;
+    dlo.dispatchEvent(new Event('change'));
+  }}
+  if (dhi && to >= dhi.min && to <= dhi.max) {{
+    dhi.value = to;
+    dhi.dispatchEvent(new Event('change'));
+  }}
+  // Open the date dropdown so the user can see the filter
+  const tbDate = document.getElementById('tb-date');
+  const ddDate = document.getElementById('dd-date');
+  if (tbDate && ddDate) {{
+    tbDate.classList.add('active');
+    ddDate.classList.add('open');
+  }}
+}})();
 </script>
 </body>
 </html>"""
