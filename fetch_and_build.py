@@ -218,7 +218,11 @@ HEXAGON_CAMERA_LABELS = {'F': 'Forward', 'A': 'Aft'}
 def get_camera_from_entity(entity_id, dataset):
     import re
     if dataset == "corona2":
+        # Zero-padded format: DS009031001DF... (KH-1/2/3/4/6)
         m = re.match(r'DS\d{6}\d{3}([A-Z]{2})', entity_id)
+        if not m:
+            # Short format: DS1052-2231DA... (KH-4A/KH-4B)
+            m = re.match(r'DS\d{4}-\d{4}([A-Z]{2})', entity_id)
         if m:
             return CORONA_CAMERA_LABELS.get(m.group(1), m.group(1))
     elif dataset == "declassiii":
@@ -230,9 +234,13 @@ def get_camera_from_entity(entity_id, dataset):
 def get_mission_from_entity(entity_id, dataset):
     import re
     if dataset == "corona2":
+        # Zero-padded format: DS009031... → "9031" (KH-1/2/3/4/6)
         m = re.match(r'DS(\d{6})', entity_id)
         if m:
-            # Strip leading zeros for readability: 009031 → 9031
+            return str(int(m.group(1)))
+        # Short format: DS1052-... → "1052" (KH-4A/KH-4B)
+        m = re.match(r'DS(\d{4})-', entity_id)
+        if m:
             return str(int(m.group(1)))
     elif dataset == "declassii":
         m = re.match(r'DZB(\d+)-', entity_id)
@@ -802,6 +810,13 @@ body{{
 .pu-nav button:hover{{background:#333;color:#fff;border-color:#555}}
 .pu-nav button:disabled{{opacity:.25;cursor:default}}
 .pu-nav .pu-count{{font-size:12px;color:#666;white-space:nowrap;min-width:44px;text-align:center}}
+.pu-mosaic-btn{{
+  width:100%;margin-top:8px;
+  background:#1a2a1a;border:1px solid #2e7d4f44;color:#81c995;
+  padding:7px 12px;border-radius:8px;font-size:12px;
+  cursor:pointer;text-align:center;transition:all .15s;font-weight:500;letter-spacing:.01em;
+}}
+.pu-mosaic-btn:hover{{background:#1a3a1a;border-color:#2e7d4f88;color:#a5d6a7}}
 .pu a{{
   font-size:12px;color:#42a5f5;text-decoration:none;
   padding:5px 12px;border:1px solid #42a5f522;border-radius:6px;transition:all .15s;font-weight:500;
@@ -1043,6 +1058,7 @@ document.querySelectorAll('.cam-btn').forEach(b => {{
 
 let showUnscanned = false;
 let hidePublished = false;
+let dateFilter = null;
 
 // ── Layers ────────────────────────────────────────────────────────────────────
 const layers = {{}};
@@ -1092,6 +1108,9 @@ function buildLayers() {{
 
     // Month-day only filter (cross-year)
     if (filterMMDD && acq && acq.slice(5) !== filterMMDD) return false;
+
+    // Exact date (mosaic mode)
+    if (dateFilter && acq !== dateFilter) return false;
 
     // Mission filter
     const ms = missionActive[p.dataset];
@@ -1238,6 +1257,11 @@ function renderPopup() {{
     : `<a href="${{p.earthExplorerUrl}}" target="_blank">EarthExplorer ↗</a>
        <button class="pu-dl-btn" data-eid="${{p.entityId}}" data-ds="${{p.dataset}}">⬇ Download</button>`;
 
+  const mosaicDate = p.acquisitionDate?.slice(0,10) || '';
+  const mosaicHtml = !isUnscanned && p.mission && p.camera
+    ? `<button class="pu-mosaic-btn" data-sat="${{p.satellite}}" data-ds="${{p.dataset}}" data-mission="${{p.mission}}" data-cam="${{p.camera}}" data-date="${{mosaicDate}}">⊞ Mission ${{p.mission}} · ${{p.camera}}${{mosaicDate ? ' · '+mosaicDate : ''}}</button>`
+    : '';
+
   popup.setContent(`<div class="pu">
     ${{imgHtml}}
     <h3>${{p.entityId}}</h3>
@@ -1252,6 +1276,7 @@ function renderPopup() {{
       ${{footerActions}}
       ${{nav}}
     </div>
+    ${{mosaicHtml}}
   </div>`);
 
   setTimeout(() => {{
@@ -1263,6 +1288,30 @@ function renderPopup() {{
     if (dlBtn) dlBtn.addEventListener('click', e => {{
       e.stopPropagation();
       openDownloadModal(dlBtn.dataset.eid, dlBtn.dataset.ds);
+    }});
+    const mosaicBtn = popup.getElement()?.querySelector('.pu-mosaic-btn');
+    if (mosaicBtn) mosaicBtn.addEventListener('click', e => {{
+      e.stopPropagation();
+      const {{sat, ds, mission, cam}} = mosaicBtn.dataset;
+      // Only this satellite
+      Object.keys(satActive).forEach(k => {{ satActive[k] = k === sat; }});
+      document.querySelectorAll('.sat-btn').forEach(b => b.classList.toggle('on', b.dataset.sat === sat));
+      // Only this mission for its dataset; reset others to all
+      Object.keys(missionActive).forEach(d => {{ missionActive[d] = d === ds ? new Set([mission]) : null; }});
+      document.querySelectorAll('.ms-chk').forEach(c => {{
+        c.checked = c.dataset.ds !== ds || c.value === mission;
+      }});
+      // Only this camera for its dataset; keep other datasets' cameras on
+      document.querySelectorAll('.cam-btn').forEach(b => {{
+        const key = b.dataset.ds + '|' + b.dataset.cam;
+        const on = b.dataset.ds !== ds || b.dataset.cam === cam;
+        cameraActive[key] = on;
+        b.classList.toggle('on', on);
+      }});
+      // Exact date filter
+      dateFilter = mosaicBtn.dataset.date || null;
+      map.closePopup();
+      buildLayers();
     }});
   }}, 0);
 }}
@@ -1440,6 +1489,8 @@ function resetAllFilters() {{
   // Missions
   Object.keys(missionActive).forEach(ds => {{ missionActive[ds] = null; }});
   document.querySelectorAll('.ms-chk').forEach(c => {{ c.checked = true; }});
+  // Exact date
+  dateFilter = null;
   // Search
   searchQ=''; document.getElementById('search').value='';
   buildLayers();
@@ -1502,7 +1553,9 @@ function updateFilterSummary() {{
 
   // Date
   const dlo = document.getElementById('date-lo'), dhi = document.getElementById('date-hi');
-  if ((dateLo && dateLo !== dlo?.min) || (dateHi && dateHi !== dhi?.max)) {{
+  if (dateFilter) {{
+    pills.push(`<span class="fs-pill">📅 ${{dateFilter}}<button data-action="exact-date">×</button></span>`);
+  }} else if ((dateLo && dateLo !== dlo?.min) || (dateHi && dateHi !== dhi?.max)) {{
     const lo = dateLo || dlo?.min || '';
     const hi = dateHi || dhi?.max || '';
     pills.push(`<span class="fs-pill">${{lo}} → ${{hi}}<button data-action="date">×</button></span>`);
@@ -1550,6 +1603,8 @@ function updateFilterSummary() {{
         const key = btn.dataset.val;
         cameraActive[key] = true;
         document.querySelector(`.cam-btn[data-ds="${{key.split('|')[0]}}"][data-cam="${{key.split('|')[1]}}"]`)?.classList.add('on');
+      }} else if (action === 'exact-date') {{
+        dateFilter = null;
       }} else if (action === 'date') {{
         dateLo=''; dateHi='';
         const dlo=document.getElementById('date-lo'), dhi=document.getElementById('date-hi');
@@ -2336,9 +2391,50 @@ def build_only(geojson_path="available_scenes.geojson"):
     print(f"\nDone — {n:,} scenes mapped (build only, no API calls).")
 
 
+def patch_html_cameras(html_path="index.html"):
+    """Fix camera/mission fields for KH-4A/KH-4B in existing index.html (no API needed)."""
+    if not os.path.exists(html_path):
+        raise RuntimeError(f"{html_path} not found")
+
+    print(f"Reading {html_path}...")
+    with open(html_path, encoding="utf-8") as f:
+        content = f.read()
+
+    marker = "const GEOJSON   = "
+    start = content.index(marker) + len(marker)
+    end   = content.index(";\nconst DS_COLORS", start)
+    geojson = json.loads(content[start:end])
+
+    n_cam = n_mis = 0
+    for feat in geojson["features"]:
+        p   = feat["properties"]
+        eid = p.get("entityId", "")
+        ds  = p.get("dataset", "")
+        if p.get("camera") is None:
+            cam = get_camera_from_entity(eid, ds)
+            if cam:
+                p["camera"] = cam
+                n_cam += 1
+        if p.get("mission") is None:
+            mis = get_mission_from_entity(eid, ds)
+            if mis:
+                p["mission"] = mis
+                n_mis += 1
+
+    print(f"Fixed camera for {n_cam:,} features")
+    print(f"Fixed mission for {n_mis:,} features")
+
+    with open("index.html", "w", encoding="utf-8") as f:
+        f.write(build_html(geojson))
+    print("Saved index.html")
+    print(f"\nDone — camera/mission fields patched without API calls.")
+
+
 if __name__ == "__main__":
     import sys
     if "--build-only" in sys.argv:
         build_only()
+    elif "--patch" in sys.argv:
+        patch_html_cameras()
     else:
         main()
