@@ -6,6 +6,7 @@ date range filters. Filters start OFF (additive model — click to show).
 """
 
 import os
+import re
 import json
 import time
 import requests
@@ -85,6 +86,12 @@ def get_satellite_type(mission, dataset):
         return "KH-9 (HEXAGON)"
 
     return "Unknown"
+
+
+def mission_sort_key(m):
+    """Sort key for mission numbers, which may carry a letter suffix (e.g. ARGON '9066A')."""
+    match = re.match(r'(\d+)', m)
+    return (int(match.group(1)) if match else 0, m)
 
 
 def get_mission_from_scene(scene):
@@ -212,19 +219,32 @@ CORONA_CAMERA_LABELS = {
     'DF': 'Forward', 'DA': 'Aft', 'DV': 'Vertical',
     'AF': 'Forward', 'AA': 'Aft', 'AV': 'Vertical',
     'MF': 'Forward', 'MA': 'Aft',
+    'MC': 'Mapping',
 }
 HEXAGON_CAMERA_LABELS = {'F': 'Forward', 'A': 'Aft'}
+DECLASSII_CAMERA_LABELS = {'H': 'GAMBIT', 'L': 'Mapping'}
 
 def get_camera_from_entity(entity_id, dataset):
     import re
     if dataset == "corona2":
-        # Zero-padded format: DS009031001DF... (KH-1/2/3/4/6)
-        m = re.match(r'DS\d{6}\d{3}([A-Z]{2})', entity_id)
+        # ARGON format: DS09066A001MC037 (KH-5)
+        m = re.match(r'DS\d{5}A\d{3}([A-Z]{2})', entity_id)
+        if not m:
+            # Zero-padded format: DS009031001DF... (KH-1/2/3/4/6)
+            m = re.match(r'DS\d{6}\d{3}([A-Z]{2})', entity_id)
         if not m:
             # Short format: DS1052-2231DA... (KH-4A/KH-4B)
             m = re.match(r'DS\d{4}-\d{4}([A-Z]{2})', entity_id)
         if m:
             return CORONA_CAMERA_LABELS.get(m.group(1), m.group(1))
+    elif dataset == "declassii":
+        # Hyphenated Mapping Camera format: DZB1216-500523L001001
+        m = re.match(r'DZB\d{4}-\d{6}([A-Z])\d{6}', entity_id)
+        if not m:
+            # Non-hyphenated GAMBIT format: DZB00403800118H006001
+            m = re.match(r'DZB\d{11}([A-Z])\d{6}', entity_id)
+        if m:
+            return DECLASSII_CAMERA_LABELS.get(m.group(1), m.group(1))
     elif dataset == "declassiii":
         m = re.match(r'D3C\d+-\d+([AF])', entity_id)
         if m:
@@ -234,6 +254,10 @@ def get_camera_from_entity(entity_id, dataset):
 def get_mission_from_entity(entity_id, dataset):
     import re
     if dataset == "corona2":
+        # ARGON format: DS09066A001MC037 → "9066A" (KH-5)
+        m = re.match(r'DS(\d{5})A\d{3}', entity_id)
+        if m:
+            return str(int(m.group(1))) + "A"
         # Zero-padded format: DS009031... → "9031" (KH-1/2/3/4/6)
         m = re.match(r'DS(\d{6})', entity_id)
         if m:
@@ -363,11 +387,11 @@ def build_html(geojson):
         ms = missions_by_ds.get(ds, {})
         if not ms:
             continue
-        missions_json[ds] = sorted(ms.keys(), key=lambda x: int(x) if x.isdigit() else x)
+        missions_json[ds] = sorted(ms.keys(), key=mission_sort_key)
         items = "".join(
             f'<label class="ms-item"><input type="checkbox" class="ms-chk" data-ds="{ds}" value="{m}" checked>'
             f'<span class="ms-num">{m}</span><span class="ms-count">{c:,}</span></label>'
-            for m, c in sorted(ms.items(), key=lambda x: int(x[0]) if x[0].isdigit() else x[0])
+            for m, c in sorted(ms.items(), key=lambda x: mission_sort_key(x[0]))
         )
         mission_sections_html += (
             f'<div class="ms-group" data-ds="{ds}">'
@@ -412,7 +436,7 @@ def build_html(geojson):
                 if acq < mission_dates[m]["lo"]: mission_dates[m]["lo"] = acq
                 if acq > mission_dates[m]["hi"]: mission_dates[m]["hi"] = acq
 
-    sat_mission_map_str = json.dumps({k: sorted(v, key=lambda x: int(x) if x.isdigit() else x)
+    sat_mission_map_str = json.dumps({k: sorted(v, key=mission_sort_key)
                                        for k, v in sat_mission_map.items()})
     mission_dates_str   = json.dumps(mission_dates)
 
@@ -640,6 +664,14 @@ body{{
 
 /* Map */
 #map{{flex:1;position:relative}}
+#globe-container{{flex:1;position:relative;background:#000014;overflow:hidden;display:none}}
+#globe-too-many{{
+  position:absolute;inset:0;display:none;
+  align-items:center;justify-content:center;flex-direction:column;
+  background:rgba(0,0,20,.82);z-index:10;text-align:center;gap:10px;
+}}
+#globe-too-many p{{color:#ccc;font-size:15px;line-height:1.6;margin:0}}
+#globe-too-many strong{{color:#fff;font-size:22px;display:block;margin-bottom:4px}}
 
 /* Empty state */
 #empty-state{{
@@ -928,6 +960,8 @@ body{{
   <!-- Basemap dropdown -->
   <button id="reset-btn">Reset</button>
   <div style="margin-left:auto;display:flex;align-items:center;gap:5px">
+    <button id="globe-btn" class="bm-btn" title="Switch to globe view">🌐 Globe</button>
+    <span style="width:1px;height:16px;background:#3a3a3a;margin:0 2px;display:inline-block"></span>
     <button class="bm-btn on" data-bm="dark">Dark</button>
     <button class="bm-btn" data-bm="satellite">Satellite</button>
     <button class="bm-btn" data-bm="hybrid">Hybrid</button>
@@ -936,6 +970,13 @@ body{{
 </div>
 
 <div id="filter-summary"></div>
+
+<div id="globe-container">
+  <div id="globe-too-many">
+    <strong id="globe-too-many-count"></strong>
+    <p>Too many scenes to render on the globe.<br>Use the filters to reduce to under 3,000 scenes.</p>
+  </div>
+</div>
 
 <div id="map">
   <div id="empty-state">
@@ -1059,6 +1100,8 @@ document.querySelectorAll('.cam-btn').forEach(b => {{
 let showUnscanned = false;
 let hidePublished = false;
 let dateFilter = null;
+let globeMode = false;
+let globeInstance = null;
 
 // ── Layers ────────────────────────────────────────────────────────────────────
 const layers = {{}};
@@ -1169,6 +1212,7 @@ function buildLayers() {{
   updateCounter(feats.length);
   updateToolbarState();
   updateFilterSummary();
+  updateGlobe();
 }}
 
 function updateCounter(n) {{
@@ -2201,6 +2245,73 @@ setInterval(checkUsgsStatus, 60_000);
     ddDate.classList.add('open');
   }}
 }})();
+
+// ── Globe view ────────────────────────────────────────────────────────────────
+const MAX_GLOBE_FEATS = 3000;
+
+function updateGlobe() {{
+  if (!globeInstance || !globeMode) return;
+  const tooMany = visibleFeats.length > MAX_GLOBE_FEATS;
+  const overlay = document.getElementById('globe-too-many');
+  overlay.style.display = tooMany ? 'flex' : 'none';
+  if (tooMany) {{
+    document.getElementById('globe-too-many-count').textContent =
+      visibleFeats.length.toLocaleString() + ' scenes visible';
+    globeInstance.polygonsData([]);
+  }} else {{
+    globeInstance.polygonsData(visibleFeats);
+  }}
+}}
+
+function _startGlobe() {{
+  const el = document.getElementById('globe-container');
+  if (!globeInstance) {{
+    globeInstance = Globe()
+      .globeImageUrl('//unpkg.com/three-globe/example/img/earth-dark.jpg')
+      .backgroundImageUrl('//unpkg.com/three-globe/example/img/night-sky.png')
+      .atmosphereColor('rgba(100,150,255,0.25)')
+      .atmosphereAltitude(0.1)
+      .polygonGeoJsonGeometry(f => f.geometry)
+      .polygonCapColor(f => (DS_COLORS[f.properties.dataset] || '#fff') + '30')
+      .polygonSideColor(() => 'rgba(0,0,0,0)')
+      .polygonStrokeColor(f => DS_COLORS[f.properties.dataset] || '#fff')
+      .polygonAltitude(0.001)
+      .polygonLabel(f => {{
+        const p = f.properties;
+        const date = p.acquisitionDate ? p.acquisitionDate.slice(0,10) : '—';
+        return `<div style="background:#111c;padding:6px 10px;border-radius:6px;font-size:12px;color:#eee;line-height:1.5">
+          <b>${{p.satellite}}</b> &middot; ${{p.entityId}}<br>📅 ${{date}}
+        </div>`;
+      }})
+      (el);
+    globeInstance.width(el.clientWidth).height(el.clientHeight);
+    new ResizeObserver(() => {{
+      globeInstance.width(el.clientWidth).height(el.clientHeight);
+    }}).observe(el);
+  }}
+  updateGlobe();
+}}
+
+document.getElementById('globe-btn').addEventListener('click', () => {{
+  globeMode = !globeMode;
+  const mapEl = document.getElementById('map');
+  const globeEl = document.getElementById('globe-container');
+  mapEl.style.display = globeMode ? 'none' : '';
+  globeEl.style.display = globeMode ? 'block' : 'none';
+  document.getElementById('globe-btn').classList.toggle('on', globeMode);
+  document.getElementById('globe-btn').title = globeMode ? 'Switch to flat map' : 'Switch to globe view';
+
+  if (!globeMode) return;
+
+  if (typeof Globe === 'undefined') {{
+    const s = document.createElement('script');
+    s.src = '//unpkg.com/globe.gl';
+    s.onload = _startGlobe;
+    document.head.appendChild(s);
+  }} else {{
+    _startGlobe();
+  }}
+}});
 </script>
 </body>
 </html>"""
