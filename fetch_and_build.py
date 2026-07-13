@@ -879,7 +879,7 @@ body{{
   <div id="stats">{counts_html} &nbsp;·&nbsp; Updated <strong>{generated[:10]}</strong></div>
   <div id="search-wrap">
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-    <input id="search" type="text" placeholder="Search entity ID…" autocomplete="off" />
+    <input id="search" type="text" placeholder="Search entity ID or lat, lon…" autocomplete="off" />
   </div>
 </div>
 
@@ -1831,10 +1831,31 @@ document.querySelectorAll('.bm-btn').forEach(btn =>
 
 // ── Search with zoom ─────────────────────────────────────────────────────────
 let st;
+// ── Coordinate search ──────────────────────────────────────────────────────────
+// Matches "26.311583, 82.444639" (comma, whitespace, or both between the numbers)
+let coordMarker = null;
+function tryCoordSearch(str) {{
+  const m = str.match(/^\s*(-?\d{{1,3}}(?:\.\d+)?)\s*[,\s]\s*(-?\d{{1,3}}(?:\.\d+)?)\s*$/);
+  if (!m) return false;
+  const lat = parseFloat(m[1]), lon = parseFloat(m[2]);
+  if (!isFinite(lat) || !isFinite(lon)) return false;
+  if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return false;
+  if (coordMarker) map.removeLayer(coordMarker);
+  coordMarker = L.marker([lat, lon]).addTo(map)
+    .bindPopup(lat.toFixed(6) + ', ' + lon.toFixed(6));
+  if (globeMode) {{ document.getElementById('globe-btn').click(); }}
+  map.setView([lat, lon], 11);
+  coordMarker.openPopup();
+  return true;
+}}
+
 document.getElementById('search').addEventListener('input', e => {{
   clearTimeout(st);
   st = setTimeout(() => {{
     searchQ = e.target.value.trim();
+    // Coordinate jump takes priority over entity-ID filtering
+    if (tryCoordSearch(searchQ)) {{ searchQ = ''; return; }}
+    if (coordMarker) {{ map.removeLayer(coordMarker); coordMarker = null; }}
     buildLayers();
     if (searchQ.length >= 4) {{
       const matches = GEOJSON.features.filter(f =>
