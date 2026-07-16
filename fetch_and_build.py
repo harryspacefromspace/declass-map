@@ -9,6 +9,7 @@ import os
 import re
 import json
 import time
+import sqlite3
 import requests
 from datetime import datetime
 
@@ -317,6 +318,9 @@ def scene_to_feature(scene, dataset):
             "camera":          camera,
             "browse":          browse_url,
             "scanned":         True,
+            "publishDate":     (scene.get("publishDate", "").split(" ")[0]
+                                if scene.get("publishDate") else ""),
+            "firstSeenAvailable": "",
             "color":           DATASET_COLORS.get(dataset, "#ffffff"),
             "earthExplorerUrl": (
                 f"https://earthexplorer.usgs.gov/scene/metadata/full/"
@@ -358,6 +362,7 @@ def build_html(geojson):
     cameras_by_ds  = _col.defaultdict(set)    # {dataset: {camera_label}}
     year_counts     = _col.defaultdict(int)   # {year: count}
     date_min = date_max = ""
+    avail_seed = ""   # earliest firstSeenAvailable = the monitoring backfill date
     for feat in geojson["features"]:
         p = feat["properties"]
         ds  = p.get("dataset", "")
@@ -365,6 +370,7 @@ def build_html(geojson):
         cam = p.get("camera")
         acq = p.get("acquisitionDate", "")[:10]
         yr  = p.get("year")
+        fsa = p.get("firstSeenAvailable", "")
         if m:
             missions_by_ds[ds][m] = missions_by_ds[ds].get(m, 0) + 1
         if cam:
@@ -374,6 +380,8 @@ def build_html(geojson):
         if acq:
             if not date_min or acq < date_min: date_min = acq
             if not date_max or acq > date_max: date_max = acq
+        if fsa and (not avail_seed or fsa < avail_seed):
+            avail_seed = fsa
 
     year_counts_json = json.dumps({str(y): year_counts[y]
                                    for y in range(year_min, year_max + 1)})
@@ -619,6 +627,16 @@ body{{
 }}
 .bm-btn:hover{{background:#333;border-color:#555;color:#fff}}
 .bm-btn.on{{background:#1a2a3a;border-color:#1976d2;color:#90caf9}}
+
+/* Recently-available chips */
+.rc-btn{{
+  background:#2a2a2a;border:1px solid #3a3a3a;color:#aaa;
+  padding:6px 12px;border-radius:8px;cursor:pointer;font-size:12px;
+  transition:all .15s;white-space:nowrap;font-weight:500;
+}}
+.rc-btn:hover{{background:#333;border-color:#555;color:#fff}}
+.rc-btn.on{{background:#0d2018;border-color:#66bb6a88;color:#66bb6a}}
+.dd-note{{font-size:11px;color:#666;line-height:1.5;margin-top:2px}}
 
 /* Mission checklist */
 .ms-group{{margin-bottom:14px}}
@@ -945,6 +963,22 @@ body{{
     </div>
   </div>
 
+  <!-- Recently available dropdown -->
+  <button class="tb-btn" id="tb-recent">🆕 Recently available <span class="tb-caret">▾</span></button>
+  <div class="dd-panel" id="dd-recent">
+    <div class="dd-inner">
+      <div class="dd-head"><div class="dd-label">Became downloadable within</div><button class="dd-clear" data-target="recent">Clear</button></div>
+      <div class="dd-chips" id="recent-chips">
+        <button class="rc-btn" data-days="1">24 hours</button>
+        <button class="rc-btn" data-days="7">7 days</button>
+        <button class="rc-btn" data-days="30">30 days</button>
+        <button class="rc-btn" data-days="90">90 days</button>
+      </div>
+      <hr class="dd-divider">
+      <div class="dd-note">Based on when the USGS monitor first saw each scene available. Scenes present at launch are dated {avail_seed}.</div>
+    </div>
+  </div>
+
   <!-- Unscanned toggle -->
   <button id="unscanned-toggle">
     <span class="unscanned-dot"></span>
@@ -1031,6 +1065,7 @@ const DS_COLORS = {ds_colors_json};
 const YEAR_MIN  = {year_min};
 const YEAR_MAX  = {year_max};
 const YEAR_COUNTS = {year_counts_json};
+const AVAIL_SEED = "{avail_seed}";  // backfill date; firstSeen == this means "available since ≤ this"
 
 // ── Leaflet ───────────────────────────────────────────────────────────────────
 const map = L.map('map', {{center:[35,30], zoom:2, preferCanvas:true, zoomControl:true}});
@@ -1099,6 +1134,7 @@ document.querySelectorAll('.cam-btn').forEach(b => {{
 
 let showUnscanned = false;
 let hidePublished = false;
+let recentDays = 0;   // 0 = off; else filter to scenes that became downloadable within N days
 let dateFilter = null;
 let globeMode = false;
 let globeInstance = null;
@@ -1133,6 +1169,7 @@ function buildLayers() {{
     // Unscanned: only show if toggle is on, and satellite filter matches
     if (p.scanned === false) {{
       if (!showUnscanned) return false;
+      if (recentDays > 0) return false;  // unscanned film is not "available to download"
       if (!satActive[p.satellite]) return false;
       return true;  // unscanned skip other filters
     }}
@@ -1140,6 +1177,15 @@ function buildLayers() {{
     // Hide published scenes if toggle is on
     if (hidePublished && p.published) return false;
     if (!satActive[p.satellite]) return false;
+
+    // Recently-available filter (based on when the scene became downloadable).
+    // Only genuine new scenes count — those seen after the initial backfill run.
+    if (recentDays > 0) {{
+      const fsa = p.firstSeenAvailable;
+      if (!fsa || fsa <= AVAIL_SEED) return false;
+      const cutoff = Date.now() - recentDays * 86400000;
+      if (Date.parse(fsa + 'T00:00:00Z') < cutoff) return false;
+    }}
 
     // Year slider
     if (yearFiltering && p.year !== null && (p.year < yearLo || p.year > yearHi)) return false;
@@ -1282,6 +1328,14 @@ function renderPopup() {{
   const dsShort = p.datasetLabel.split('—')[0].trim();
   const isUnscanned = p.scanned === false;
 
+  // Availability metadata
+  let metaHtml = `📅 Acquired ${{date}}`;
+  if (p.publishDate) metaHtml += `<br>📥 USGS published ${{p.publishDate}}`;
+  const fsa = p.firstSeenAvailable;
+  if (fsa && fsa > AVAIL_SEED) {{
+    metaHtml += `<br><span style="color:#66bb6a">🆕 Newly available ${{fsa}}</span>`;
+  }}
+
   const imgHtml = p.browse
     ? `<img class="pu-img" src="${{p.browse}}" onerror="this.style.display='none'" title="Click to view full image" onclick="window.open('${{p.browse}}','_blank')">`
     : isUnscanned
@@ -1315,7 +1369,7 @@ function renderPopup() {{
       ${{isUnscanned ? '<span class="pu-tag pu-tag-unscanned">Unscanned</span>' : ''}}
       ${{p.published ? '<span class="pu-tag pu-tag-published">✓ On SFS</span>' : ''}}
     </div>
-    <div class="meta">📅 ${{date}}</div>
+    <div class="meta">${{metaHtml}}</div>
     <div class="pu-footer">
       ${{footerActions}}
       ${{nav}}
@@ -1535,6 +1589,9 @@ function resetAllFilters() {{
   document.querySelectorAll('.ms-chk').forEach(c => {{ c.checked = true; }});
   // Exact date
   dateFilter = null;
+  // Recently available
+  recentDays = 0;
+  document.querySelectorAll('.rc-btn').forEach(b => b.classList.remove('on'));
   // Search
   searchQ=''; document.getElementById('search').value='';
   buildLayers();
@@ -1565,6 +1622,9 @@ document.querySelectorAll('.dd-clear').forEach(btn => {{
     }} else if (t === 'mission') {{
       Object.keys(missionActive).forEach(ds => {{ missionActive[ds] = null; }});
       document.querySelectorAll('.ms-chk').forEach(c => {{ c.checked = true; }});
+    }} else if (t === 'recent') {{
+      recentDays = 0;
+      document.querySelectorAll('.rc-btn').forEach(b => b.classList.remove('on'));
     }}
     buildLayers();
   }});
@@ -1605,6 +1665,12 @@ function updateFilterSummary() {{
     pills.push(`<span class="fs-pill">${{lo}} → ${{hi}}<button data-action="date">×</button></span>`);
   }} else if (yearFiltering) {{
     pills.push(`<span class="fs-pill">${{yearLo}}–${{yearHi}}<button data-action="year">×</button></span>`);
+  }}
+
+  // Recently available
+  if (recentDays > 0) {{
+    const lbl = {{1:'24h', 7:'7 days', 30:'30 days', 90:'90 days'}}[recentDays] || recentDays+'d';
+    pills.push(`<span class="fs-pill">🆕 New ≤ ${{lbl}}<button data-action="recent">×</button></span>`);
   }}
 
   // Missions — one pill per dataset, never one per mission number
@@ -1659,6 +1725,9 @@ function updateFilterSummary() {{
         const ds=btn.dataset.val;
         missionActive[ds]=null;
         document.querySelectorAll(`.ms-chk[data-ds="${{ds}}"]`).forEach(c=>{{c.checked=true;}});
+      }} else if (action === 'recent') {{
+        recentDays = 0;
+        document.querySelectorAll('.rc-btn').forEach(b => b.classList.remove('on'));
       }}
       buildLayers();
     }});
@@ -1671,6 +1740,17 @@ document.querySelectorAll('.cam-btn').forEach(btn => {{
     const key = btn.dataset.ds + '|' + btn.dataset.cam;
     cameraActive[key] = !cameraActive[key];
     btn.classList.toggle('on', cameraActive[key]);
+    buildLayers();
+  }});
+}});
+
+// ── Recently-available filter ─────────────────────────────────────────────────
+document.querySelectorAll('.rc-btn').forEach(btn => {{
+  btn.addEventListener('click', () => {{
+    const d = parseInt(btn.dataset.days);
+    recentDays = (recentDays === d) ? 0 : d;  // click again to turn off
+    document.querySelectorAll('.rc-btn').forEach(b =>
+      b.classList.toggle('on', parseInt(b.dataset.days) === recentDays));
     buildLayers();
   }});
 }});
@@ -1700,6 +1780,7 @@ const DD_PAIRS = [
   ['tb-cam',     'dd-cam'],
   ['tb-date',    'dd-date'],
   ['tb-mission', 'dd-mission'],
+  ['tb-recent',  'dd-recent'],
 ];
 
 function closeAllDropdowns(except) {{
@@ -1800,6 +1881,8 @@ function updateToolbarState() {{
   const missionFiltered = Object.entries(missionActive)
     .some(([ds, ms]) => ms !== null && activeDsSet.has(ds));
   document.getElementById('tb-mission').classList.toggle('has-filter', missionFiltered);
+
+  document.getElementById('tb-recent').classList.toggle('has-filter', recentDays > 0);
 }}
 
 // ── Mission checkboxes
@@ -1835,7 +1918,7 @@ let st;
 // Matches "26.311583, 82.444639" (comma, whitespace, or both between the numbers)
 let coordMarker = null;
 function tryCoordSearch(str) {{
-  const m = str.match(/^\s*(-?\d{{1,3}}(?:\.\d+)?)\s*[,\s]\s*(-?\d{{1,3}}(?:\.\d+)?)\s*$/);
+  const m = str.match(/^\\s*(-?\\d{{1,3}}(?:\\.\\d+)?)\\s*[,\\s]\\s*(-?\\d{{1,3}}(?:\\.\\d+)?)\\s*$/);
   if (!m) return false;
   const lat = parseFloat(m[1]), lon = parseFloat(m[2]);
   if (!isFinite(lat) || !isFinite(lon)) return false;
@@ -2364,6 +2447,41 @@ def fetch_published_ids():
         return set()
 
 
+def stamp_availability(features, db_path="scenes.db"):
+    """Join scenes.db to stamp each feature with the date it became downloadable.
+
+    - firstSeenAvailable: when the monitor first detected the scene as available
+    - publishDate: USGS's own publishDate (filled only if not already set)
+    Matches on entityId. Scenes not in the DB (e.g. unscanned film) are left blank.
+    """
+    if not os.path.exists(db_path):
+        print(f"  WARNING: {db_path} not found — skipping availability dates")
+        return
+    try:
+        conn = sqlite3.connect(db_path)
+        rows = conn.execute(
+            "SELECT entity_id, publish_date, first_seen_available FROM scenes"
+        ).fetchall()
+        conn.close()
+    except Exception as e:
+        print(f"  WARNING: could not read {db_path} — {e}")
+        return
+
+    by_id = {r[0]: (r[1], r[2]) for r in rows}
+    n = 0
+    for f in features:
+        rec = by_id.get(f["properties"].get("entityId", ""))
+        if not rec:
+            continue
+        pub, fsa = rec
+        if fsa:
+            f["properties"]["firstSeenAvailable"] = str(fsa)[:10]
+        if pub and not f["properties"].get("publishDate"):
+            f["properties"]["publishDate"] = str(pub)[:10]
+        n += 1
+    print(f"  Stamped availability dates on {n:,} of {len(features):,} features from {db_path}")
+
+
 def load_previous_features(path="available_scenes.geojson"):
     """Load features from the last successful run, grouped by dataset."""
     if not os.path.exists(path):
@@ -2460,6 +2578,10 @@ def main():
             published_count += 1
     print(f"  {published_count:,} scenes marked as published on SpaceFromSpace")
 
+    # Stamp availability dates (publishDate + first-seen-available) from scenes.db
+    print("Stamping availability dates from scenes.db...")
+    stamp_availability(all_features)
+
     counts    = {}
     years     = []
     sat_seen  = []
@@ -2517,6 +2639,8 @@ def build_only(geojson_path="available_scenes.geojson"):
         geojson = json.load(f)
     n = len(geojson.get("features", []))
     print(f"  {n:,} features loaded")
+    # Refresh availability dates from scenes.db on every rebuild
+    stamp_availability(geojson["features"])
     with open("index.html", "w", encoding="utf-8") as f:
         f.write(build_html(geojson))
     print("Saved index.html")
