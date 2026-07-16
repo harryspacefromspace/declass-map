@@ -202,8 +202,70 @@ body{
 .fs-clear-all:hover{color:#fff;border-color:#888}
 
 /* Map */
-#map{flex:1;position:relative}
-#globe-container{flex:1;position:relative;background:#000014;overflow:hidden;display:none}
+#stage{flex:1;display:flex;min-height:0;min-width:0}
+#map{flex:1;position:relative;min-width:0}
+#globe-container{flex:1;position:relative;background:#000014;overflow:hidden;display:none;min-width:0}
+
+/* ── Right sidebar — scenes in view ── */
+#sidebar{
+  width:330px;flex-shrink:0;background:#1a1a1a;border-left:1px solid #2c2c2c;
+  display:none;flex-direction:column;min-height:0;
+}
+#sidebar.open{display:flex}
+#sb-head{
+  display:flex;align-items:flex-start;justify-content:space-between;
+  padding:12px 14px;border-bottom:1px solid #2c2c2c;
+}
+#sb-title{font-size:13px;color:#fff;font-weight:500}
+#sb-count{font-size:11px;color:#666;margin-top:3px}
+#sb-close{
+  background:transparent;border:none;color:#666;font-size:15px;cursor:pointer;
+  padding:2px 7px;border-radius:6px;transition:all .12s;line-height:1.2;
+}
+#sb-close:hover{color:#fff;background:#2a2a2a}
+#sb-controls{padding:10px 14px;border-bottom:1px solid #2c2c2c}
+#sb-sort{
+  width:100%;background:#2a2a2a;border:1px solid #3a3a3a;color:#ddd;
+  padding:7px 10px;border-radius:8px;font-size:12px;outline:none;cursor:pointer;
+  color-scheme:dark;font-family:inherit;
+}
+#sb-sort:focus{border-color:#90caf9}
+#sb-inview-wrap{
+  display:flex;align-items:center;gap:7px;margin-top:9px;
+  font-size:11px;color:#888;cursor:pointer;user-select:none;
+}
+#sb-inview-wrap:hover{color:#ddd}
+#sb-inview{accent-color:#42a5f5;width:13px;height:13px;cursor:pointer;flex-shrink:0}
+#sb-list{flex:1;overflow-y:auto;padding:8px;min-height:0}
+#sb-list::-webkit-scrollbar{width:6px}
+#sb-list::-webkit-scrollbar-thumb{background:#333;border-radius:3px}
+.sb-item{display:flex;gap:10px;padding:8px;border-radius:8px;cursor:pointer;transition:background .12s}
+.sb-item:hover{background:#2a2a2a}
+.sb-item.active{background:#1a3a5c}
+.sb-thumb-ph{
+  width:44px;height:44px;flex-shrink:0;border-radius:6px;background:#121212;
+  border:1px dashed #2c2c2c;display:flex;align-items:center;justify-content:center;
+  font-size:14px;color:#333;
+}
+.sb-item:hover .sb-thumb-ph{color:#555;border-color:#3a3a3a}
+.sb-meta{min-width:0;flex:1}
+.sb-id{
+  font-size:11px;color:#ddd;font-family:monospace;letter-spacing:.02em;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.sb-sub{font-size:11px;color:#888;margin-top:3px}
+.sb-tags{display:flex;gap:4px;flex-wrap:wrap;margin-top:4px}
+.sb-tag{font-size:9px;padding:1px 5px;border-radius:3px;border:1px solid #2c2c2c;color:#888;letter-spacing:.03em}
+.sb-tag.un{color:#ffa726;border-color:#ffa72633;background:#ffa7260a}
+.sb-tag.pub{color:#66bb6a;border-color:#66bb6a33;background:#66bb6a0a}
+.sb-tag.new{color:#81c995;border-color:#2e7d4f55;background:#2e7d4f0a}
+#sb-more{
+  margin:8px;padding:8px;background:#2a2a2a;border:1px solid #3a3a3a;color:#aaa;
+  border-radius:8px;font-size:12px;cursor:pointer;display:none;font-weight:500;
+  transition:all .12s;
+}
+#sb-more:hover{background:#333;color:#fff;border-color:#555}
+#sb-empty{padding:28px 14px;text-align:center;color:#444;font-size:12px;line-height:1.7}
 #globe-too-many{
   position:absolute;inset:0;display:none;
   align-items:center;justify-content:center;flex-direction:column;
@@ -525,6 +587,7 @@ body{
   <!-- Basemap dropdown -->
   <button id="reset-btn">Reset</button>
   <div style="margin-left:auto;display:flex;align-items:center;gap:5px">
+    <button id="sb-toggle" class="bm-btn" title="List the scenes drawn on the map">☰ List</button>
     <button id="globe-btn" class="bm-btn" title="Switch to globe view">🌐 Globe</button>
     <span style="width:1px;height:16px;background:#3a3a3a;margin:0 2px;display:inline-block"></span>
     <button class="bm-btn on" data-bm="dark">Dark</button>
@@ -535,6 +598,8 @@ body{
 </div>
 
 <div id="filter-summary"></div>
+
+<div id="stage">
 
 <div id="globe-container">
   <div id="globe-too-many">
@@ -573,6 +638,33 @@ body{
   </div>
 
 </div>
+
+<!-- Right sidebar — scenes currently drawn on the map -->
+<aside id="sidebar">
+  <div id="sb-head">
+    <div>
+      <div id="sb-title">Scenes on map</div>
+      <div id="sb-count">—</div>
+    </div>
+    <button id="sb-close" title="Close panel">✕</button>
+  </div>
+  <div id="sb-controls">
+    <select id="sb-sort">
+      <option value="date-desc">Newest acquired first</option>
+      <option value="date-asc">Oldest acquired first</option>
+      <option value="avail-desc">Recently available first</option>
+      <option value="sat-asc">Satellite</option>
+      <option value="mission-asc">Mission</option>
+    </select>
+    <label id="sb-inview-wrap">
+      <input type="checkbox" id="sb-inview"> Only scenes in current view
+    </label>
+  </div>
+  <div id="sb-list"></div>
+  <button id="sb-more">Load more</button>
+</aside>
+
+</div><!-- /#stage -->
 
 <!-- Download modal (outside map, fixed overlay) -->
 <div id="dl-modal">
@@ -618,15 +710,18 @@ const BASEMAPS = {
 };
 let activeBmLayers = [];
 function setBasemap(key) {
+  const bm = BASEMAPS[key];
+  if (!bm) return;              // ignore .bm-btn styled buttons that aren't basemaps
   activeBmLayers.forEach(l => map.removeLayer(l));
   activeBmLayers = [];
-  const bm = BASEMAPS[key];
   const arr = Array.isArray(bm) ? bm : [bm];
   // Add in order: first layer goes furthest back
   arr.forEach(l => l.addTo(map));
   arr[0].bringToBack();          // imagery always at the very back
   activeBmLayers = [...arr];
-  document.querySelectorAll('.bm-btn').forEach(b => b.classList.toggle('on', b.dataset.bm===key));
+  // Only real basemap buttons own the 'on' state here — #globe-btn and
+  // #sb-toggle share the .bm-btn look but manage their own toggle state.
+  document.querySelectorAll('.bm-btn[data-bm]').forEach(b => b.classList.toggle('on', b.dataset.bm===key));
 }
 setBasemap('dark');
 // Ensure Leaflet knows the correct map size after initial render
@@ -791,6 +886,7 @@ function buildLayers() {
   updateToolbarState();
   updateFilterSummary();
   updateGlobe();
+  updateSidebar(true);
 }
 
 function updateCounter(n) {
@@ -967,6 +1063,141 @@ map.on('click', e => {
   renderPopup();
 });
 map.on('popupclose', () => { if (highlightLayer) { map.removeLayer(highlightLayer); highlightLayer=null; } });
+
+// ── Sidebar: list of the scenes drawn on the map ──────────────────────────────
+const SB_PAGE = 60;
+let sbOpen = false, sbInView = false, sbLimit = SB_PAGE, sbShown = [];
+
+// Cached bbox per feature: [minLng, minLat, maxLng, maxLat]
+function featBBox(f) {
+  if (f._bb !== undefined) return f._bb;
+  const g = f.geometry;
+  if (!g || !g.coordinates) return (f._bb = null);
+  let minX=Infinity, minY=Infinity, maxX=-Infinity, maxY=-Infinity;
+  const scan = ring => {
+    for (const c of ring) {
+      if (c[0]<minX) minX=c[0];
+      if (c[0]>maxX) maxX=c[0];
+      if (c[1]<minY) minY=c[1];
+      if (c[1]>maxY) maxY=c[1];
+    }
+  };
+  if (g.type === 'Polygon') g.coordinates.forEach(scan);
+  else if (g.type === 'MultiPolygon') g.coordinates.forEach(poly => poly.forEach(scan));
+  else return (f._bb = null);
+  if (!isFinite(minX)) return (f._bb = null);
+  return (f._bb = [minX, minY, maxX, maxY]);
+}
+
+function featsInView() {
+  const b = map.getBounds();
+  const w = b.getWest(), e = b.getEast(), s = b.getSouth(), n = b.getNorth();
+  return visibleFeats.filter(f => {
+    const bb = featBBox(f);
+    if (!bb) return false;
+    return !(bb[2] < w || bb[0] > e || bb[3] < s || bb[1] > n);
+  });
+}
+
+const SB_SORTS = {
+  'date-desc':  (a,b) => (b.properties.acquisitionDate||'').localeCompare(a.properties.acquisitionDate||''),
+  'date-asc':   (a,b) => (a.properties.acquisitionDate||'').localeCompare(b.properties.acquisitionDate||''),
+  'avail-desc': (a,b) => (b.properties.firstSeenAvailable||'').localeCompare(a.properties.firstSeenAvailable||''),
+  'sat-asc':    (a,b) => (a.properties.satellite||'').localeCompare(b.properties.satellite||'')
+                          || (b.properties.acquisitionDate||'').localeCompare(a.properties.acquisitionDate||''),
+  'mission-asc':(a,b) => (a.properties.mission||'').localeCompare(b.properties.mission||'', undefined, {numeric:true})
+                          || (b.properties.acquisitionDate||'').localeCompare(a.properties.acquisitionDate||''),
+};
+
+function updateSidebar(resetPage) {
+  if (!sbOpen) return;
+  if (resetPage) sbLimit = SB_PAGE;
+
+  const feats = (sbInView ? featsInView() : visibleFeats).slice();
+  feats.sort(SB_SORTS[document.getElementById('sb-sort').value] || SB_SORTS['date-desc']);
+
+  document.getElementById('sb-title').textContent = sbInView ? 'Scenes in view' : 'Scenes on map';
+  document.getElementById('sb-count').textContent =
+    feats.length.toLocaleString() + ' scene' + (feats.length === 1 ? '' : 's');
+
+  const list = document.getElementById('sb-list');
+  const more = document.getElementById('sb-more');
+  if (!feats.length) {
+    list.innerHTML = '<div id="sb-empty">No scenes to list.<br>Pick a satellite or adjust the filters.</div>';
+    more.style.display = 'none';
+    sbShown = [];
+    return;
+  }
+
+  sbShown = feats.slice(0, sbLimit);
+  list.innerHTML = sbShown.map((f, i) => {
+    const p = f.properties;
+    const d = (p.acquisitionDate || '').slice(0,10) || '—';
+    // No <img> here on purpose: USGS browse images are up to ~7.5MB each, so a
+    // list of them would be brutal. The preview loads on click, in the popup.
+    const thumb = `<div class="sb-thumb-ph">▦</div>`;
+    const tags = [];
+    tags.push(p.scanned === false
+      ? '<span class="sb-tag un">Unscanned</span>'
+      : '<span class="sb-tag">Downloadable</span>');
+    if (p.published) tags.push('<span class="sb-tag pub">On SFS</span>');
+    if (p.firstSeenAvailable && p.firstSeenAvailable > AVAIL_SEED)
+      tags.push('<span class="sb-tag new">New</span>');
+    return `<div class="sb-item" data-i="${i}">
+      ${thumb}
+      <div class="sb-meta">
+        <div class="sb-id">${p.entityId}</div>
+        <div class="sb-sub">${d} · ${p.satellite || '—'}</div>
+        <div class="sb-tags">${tags.join('')}</div>
+      </div>
+    </div>`;
+  }).join('');
+
+  if (feats.length > sbLimit) {
+    more.style.display = 'block';
+    more.textContent = 'Load more (' + (feats.length - sbLimit).toLocaleString() + ' more)';
+  } else {
+    more.style.display = 'none';
+  }
+}
+
+// Row click → open that scene's popup (pan only if it's off-screen)
+document.getElementById('sb-list').addEventListener('click', e => {
+  const el = e.target.closest('.sb-item');
+  if (!el) return;
+  const f = sbShown[parseInt(el.dataset.i)];
+  if (!f) return;
+  const bb = featBBox(f);
+  if (!bb) return;
+  const center = L.latLng((bb[1]+bb[3])/2, (bb[0]+bb[2])/2);
+  if (!map.getBounds().contains(center)) map.panTo(center);
+  puFeats = [f]; puIdx = 0;
+  popup.setLatLng(center).addTo(map);
+  renderPopup();
+  document.querySelectorAll('.sb-item').forEach(x => x.classList.remove('active'));
+  el.classList.add('active');
+});
+
+function setSidebar(open) {
+  sbOpen = open;
+  document.getElementById('sidebar').classList.toggle('open', open);
+  document.getElementById('sb-toggle').classList.toggle('on', open);
+  // Map width changed — let Leaflet re-measure, then refresh the list
+  setTimeout(() => { map.invalidateSize(); updateSidebar(true); }, 0);
+}
+document.getElementById('sb-toggle').addEventListener('click', () => setSidebar(!sbOpen));
+document.getElementById('sb-close').addEventListener('click', () => setSidebar(false));
+document.getElementById('sb-sort').addEventListener('change', () => updateSidebar(true));
+document.getElementById('sb-inview').addEventListener('change', e => {
+  sbInView = e.target.checked;
+  updateSidebar(true);
+});
+document.getElementById('sb-more').addEventListener('click', () => {
+  sbLimit += SB_PAGE;
+  updateSidebar(false);
+});
+// Only recompute on pan/zoom when the list is actually view-limited
+map.on('moveend', () => { if (sbOpen && sbInView) updateSidebar(true); });
 
 // ── Satellite buttons ─────────────────────────────────────────────────────────
 function syncMissionsToSat(sat, on) {
@@ -1453,7 +1684,8 @@ document.querySelectorAll('.ms-all').forEach(btn => {
 });
 
 // ── Basemap ───────────────────────────────────────────────────────────────────
-document.querySelectorAll('.bm-btn').forEach(btn =>
+// [data-bm] only — #globe-btn and #sb-toggle reuse the .bm-btn styling
+document.querySelectorAll('.bm-btn[data-bm]').forEach(btn =>
   btn.addEventListener('click', () => setBasemap(btn.dataset.bm)));
 
 // ── Search with zoom ─────────────────────────────────────────────────────────
