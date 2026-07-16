@@ -95,6 +95,32 @@ def mission_sort_key(m):
     return (int(match.group(1)) if match else 0, m)
 
 
+# Properties the map can rebuild client-side, so they are not worth storing
+# 107k times in the served file (~26% of it). See slim_features().
+DERIVED_PROPS = ("datasetLabel", "color", "earthExplorerUrl", "year")
+
+
+def feat_year(props):
+    """Acquisition year, derived from acquisitionDate."""
+    y = (props.get("acquisitionDate") or "")[:4]
+    return int(y) if y.isdigit() else None
+
+
+def slim_features(features):
+    """Strip derivable properties from features (idempotent; handles legacy data)."""
+    removed = 0
+    for f in features:
+        p = f.get("properties")
+        if not p:
+            continue
+        for k in DERIVED_PROPS:
+            if k in p:
+                del p[k]
+                removed += 1
+    if removed:
+        print(f"  Slimmed {removed:,} derivable properties from {len(features):,} features")
+
+
 def get_mission_from_scene(scene):
     for item in scene.get("metadata", []):
         if item.get("fieldName") == "Mission":
@@ -290,7 +316,6 @@ def scene_to_feature(scene, dataset):
         acq = tc.get("startDate", "")
     if not acq:
         acq = scene.get("acquisitionDate", "")
-    year = int(acq[:4]) if acq and len(acq) >= 4 and acq[:4].isdigit() else None
 
     # Prefer full-resolution browsePath over thumbnailPath
     browse_url = ""
@@ -303,16 +328,17 @@ def scene_to_feature(scene, dataset):
     camera   = get_camera_from_entity(entity_id, dataset)
     mission_num = get_mission_from_entity(entity_id, dataset)
 
+    # NB: datasetLabel / color / earthExplorerUrl / year are intentionally NOT
+    # stored — the map rebuilds them from `dataset`, `entityId` and
+    # `acquisitionDate`. See DERIVED_PROPS / slim_features().
     return {
         "type": "Feature",
         "geometry": geom,
         "properties": {
             "entityId":        entity_id,
             "dataset":         dataset,
-            "datasetLabel":    DATASET_LABELS.get(dataset, dataset),
             "displayId":       scene.get("displayId", ""),
             "acquisitionDate": acq,
-            "year":            year,
             "satellite":       sat_type,
             "mission":         mission_num,
             "camera":          camera,
@@ -321,11 +347,6 @@ def scene_to_feature(scene, dataset):
             "publishDate":     (scene.get("publishDate", "").split(" ")[0]
                                 if scene.get("publishDate") else ""),
             "firstSeenAvailable": "",
-            "color":           DATASET_COLORS.get(dataset, "#ffffff"),
-            "earthExplorerUrl": (
-                f"https://earthexplorer.usgs.gov/scene/metadata/full/"
-                f"{DATASET_IDS.get(dataset, dataset)}/{entity_id}/"
-            ),
         },
     }
 
@@ -357,6 +378,8 @@ def build_html(geojson):
     year_max       = geojson["metadata"]["year_max"]
     sat_types      = geojson["metadata"]["sat_types"]
     ds_colors_json = json.dumps(DATASET_COLORS)
+    ds_labels_json = json.dumps(DATASET_LABELS)
+    ds_ee_json     = json.dumps(DATASET_IDS)
 
     # Build mission lists, camera sets, and year counts from features
     missions_by_ds = _col.defaultdict(dict)   # {dataset: {mission: count}}
@@ -370,7 +393,7 @@ def build_html(geojson):
         m   = p.get("mission")
         cam = p.get("camera")
         acq = p.get("acquisitionDate", "")[:10]
-        yr  = p.get("year")
+        yr  = feat_year(p)
         fsa = p.get("firstSeenAvailable", "")
         if m:
             missions_by_ds[ds][m] = missions_by_ds[ds].get(m, 0) + 1
@@ -681,8 +704,10 @@ body{{
 }}
 .fs-clear-all:hover{{color:#fff;border-color:#888}}
 
+#view-group{{margin-left:auto;display:flex;align-items:center;gap:5px}}
+
 /* Map */
-#stage{{flex:1;display:flex;min-height:0;min-width:0}}
+#stage{{flex:1;display:flex;min-height:0;min-width:0;position:relative}}
 #map{{flex:1;position:relative;min-width:0}}
 #globe-container{{flex:1;position:relative;background:#000014;overflow:hidden;display:none;min-width:0}}
 
@@ -951,6 +976,24 @@ body{{
 .leaflet-control-zoom a:hover{{background:#2a2a2a!important;color:#fff!important}}
 .leaflet-control-attribution{{background:rgba(0,0,0,.5)!important;color:#444!important;font-size:10px!important}}
 .leaflet-control-attribution a{{color:#444!important}}
+
+/* ── Narrow screens (must stay last: these override the base rules above) ──
+   #filters is nowrap by design; on a phone that pushed List/Globe/basemaps
+   off-screen with no way to reach them. Wrap rather than scroll, because
+   .dd-panel dropdowns are absolutely positioned inside #filters and an
+   overflow-x:auto here would clip them vertically. */
+@media (max-width:900px){{
+  #header{{padding:8px 12px;gap:10px}}
+  #filters{{flex-wrap:wrap;padding:8px 12px}}
+  #reset-btn{{margin-left:0}}
+  #view-group{{margin-left:0}}
+  #search-wrap{{margin-left:0;width:100%}}
+  #search{{width:100%}}
+}}
+/* Sidebar takes over the stage on small screens instead of squeezing the map */
+@media (max-width:700px){{
+  #sidebar{{position:absolute;inset:0;width:auto;border-left:none;z-index:1200}}
+}}
 </style>
 </head>
 <body>
@@ -1056,7 +1099,7 @@ body{{
 
   <!-- Basemap dropdown -->
   <button id="reset-btn">Reset</button>
-  <div style="margin-left:auto;display:flex;align-items:center;gap:5px">
+  <div id="view-group">
     <button id="sb-toggle" class="bm-btn" title="List the scenes drawn on the map">☰ List</button>
     <button id="globe-btn" class="bm-btn" title="Switch to globe view">🌐 Globe</button>
     <span style="width:1px;height:16px;background:#3a3a3a;margin:0 2px;display:inline-block"></span>
@@ -1156,6 +1199,11 @@ body{{
 let GEOJSON     = {{type:'FeatureCollection', features:[]}};  // populated from DATA_URL at load
 const DATA_URL  = 'https://raw.githubusercontent.com/harryspacefromspace/declass-map/main/available_scenes.geojson';
 const DS_COLORS = {ds_colors_json};
+// Rebuilt client-side instead of being stored on all 107k features
+const DS_LABELS = {ds_labels_json};
+const DS_EE_IDS = {ds_ee_json};
+const eeUrl = p => 'https://earthexplorer.usgs.gov/scene/metadata/full/'
+                   + (DS_EE_IDS[p.dataset] || p.dataset) + '/' + p.entityId + '/';
 const YEAR_MIN  = {year_min};
 const YEAR_MAX  = {year_max};
 const YEAR_COUNTS = {year_counts_json};
@@ -1368,12 +1416,21 @@ function updateCounter(n) {{
 }}
 
 // ── Load scene data (external file keeps index.html small) ────────────────────
+// `year` isn't stored per-feature; derive it once here so the filter stays fast.
+function hydrate(feats) {{
+  for (const f of feats) {{
+    const p = f.properties;
+    const y = parseInt((p.acquisitionDate || '').slice(0, 4), 10);
+    p.year = isNaN(y) ? null : y;
+  }}
+}}
+
 (function loadSceneData() {{
   const counter = document.getElementById('counter');
   counter.textContent = 'Loading scenes…';
   fetch(DATA_URL)
     .then(r => {{ if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }})
-    .then(data => {{ GEOJSON = data; buildLayers(); }})
+    .then(data => {{ GEOJSON = data; hydrate(GEOJSON.features); buildLayers(); }})
     .catch(err => {{
       console.error('Scene data load failed:', err);
       counter.textContent = 'Failed to load scenes — retrying…';
@@ -1435,7 +1492,7 @@ function renderPopup() {{
   const p   = puFeats[puIdx].properties;
   const c   = DS_COLORS[p.dataset]||'#fff';
   const date = p.acquisitionDate ? p.acquisitionDate.slice(0,10) : '—';
-  const dsShort = p.datasetLabel.split('—')[0].trim();
+  const dsShort = (DS_LABELS[p.dataset] || p.dataset).split('—')[0].trim();
   const isUnscanned = p.scanned === false;
 
   // Availability metadata
@@ -1460,9 +1517,9 @@ function renderPopup() {{
     </div>` : '';
 
   const footerActions = isUnscanned
-    ? `<a href="${{p.earthExplorerUrl}}" target="_blank">EarthExplorer ↗</a>
+    ? `<a href="${{eeUrl(p)}}" target="_blank">EarthExplorer ↗</a>
        <span class="pu-unscanned-label">📷 Film not yet scanned</span>`
-    : `<a href="${{p.earthExplorerUrl}}" target="_blank">EarthExplorer ↗</a>
+    : `<a href="${{eeUrl(p)}}" target="_blank">EarthExplorer ↗</a>
        <button class="pu-dl-btn" data-eid="${{p.entityId}}" data-ds="${{p.dataset}}">⬇ Download</button>`;
 
   const mosaicDate = p.acquisitionDate?.slice(0,10) || '';
@@ -2828,6 +2885,10 @@ def main():
     print("Stamping availability dates from scenes.db...")
     stamp_availability(all_features)
 
+    # Drop client-derivable properties (also cleans them off fallback features
+    # loaded from an older available_scenes.geojson)
+    slim_features(all_features)
+
     counts    = {}
     years     = []
     sat_seen  = []
@@ -2835,8 +2896,9 @@ def main():
         p  = f["properties"]
         ds = p["dataset"]
         counts[ds] = counts.get(ds, 0) + 1
-        if p.get("year"):
-            years.append(p["year"])
+        y = feat_year(p)
+        if y:
+            years.append(y)
         st = p.get("satellite", "Unknown")
         if st not in sat_seen:
             sat_seen.append(st)
@@ -2889,6 +2951,7 @@ def build_only(geojson_path="available_scenes.geojson"):
     print(f"  {n:,} features loaded")
     # Refresh availability dates from scenes.db on every rebuild
     stamp_availability(geojson["features"])
+    slim_features(geojson["features"])
     with open("index.html", "w", encoding="utf-8") as f:
         f.write(build_html(geojson))
     print("Saved index.html")

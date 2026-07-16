@@ -201,8 +201,10 @@ body{
 }
 .fs-clear-all:hover{color:#fff;border-color:#888}
 
+#view-group{margin-left:auto;display:flex;align-items:center;gap:5px}
+
 /* Map */
-#stage{flex:1;display:flex;min-height:0;min-width:0}
+#stage{flex:1;display:flex;min-height:0;min-width:0;position:relative}
 #map{flex:1;position:relative;min-width:0}
 #globe-container{flex:1;position:relative;background:#000014;overflow:hidden;display:none;min-width:0}
 
@@ -471,6 +473,24 @@ body{
 .leaflet-control-zoom a:hover{background:#2a2a2a!important;color:#fff!important}
 .leaflet-control-attribution{background:rgba(0,0,0,.5)!important;color:#444!important;font-size:10px!important}
 .leaflet-control-attribution a{color:#444!important}
+
+/* ── Narrow screens (must stay last: these override the base rules above) ──
+   #filters is nowrap by design; on a phone that pushed List/Globe/basemaps
+   off-screen with no way to reach them. Wrap rather than scroll, because
+   .dd-panel dropdowns are absolutely positioned inside #filters and an
+   overflow-x:auto here would clip them vertically. */
+@media (max-width:900px){
+  #header{padding:8px 12px;gap:10px}
+  #filters{flex-wrap:wrap;padding:8px 12px}
+  #reset-btn{margin-left:0}
+  #view-group{margin-left:0}
+  #search-wrap{margin-left:0;width:100%}
+  #search{width:100%}
+}
+/* Sidebar takes over the stage on small screens instead of squeezing the map */
+@media (max-width:700px){
+  #sidebar{position:absolute;inset:0;width:auto;border-left:none;z-index:1200}
+}
 </style>
 </head>
 <body>
@@ -586,7 +606,7 @@ body{
 
   <!-- Basemap dropdown -->
   <button id="reset-btn">Reset</button>
-  <div style="margin-left:auto;display:flex;align-items:center;gap:5px">
+  <div id="view-group">
     <button id="sb-toggle" class="bm-btn" title="List the scenes drawn on the map">☰ List</button>
     <button id="globe-btn" class="bm-btn" title="Switch to globe view">🌐 Globe</button>
     <span style="width:1px;height:16px;background:#3a3a3a;margin:0 2px;display:inline-block"></span>
@@ -686,6 +706,11 @@ body{
 let GEOJSON     = {type:'FeatureCollection', features:[]};  // populated from DATA_URL at load
 const DATA_URL  = 'https://raw.githubusercontent.com/harryspacefromspace/declass-map/main/available_scenes.geojson';
 const DS_COLORS = {"corona2": "#00ff88", "declassii": "#00aaff", "declassiii": "#ff9900"};
+// Rebuilt client-side instead of being stored on all 107k features
+const DS_LABELS = {"corona2": "Declass I \u2014 CORONA/ARGON/LANYARD", "declassii": "Declass II \u2014 GAMBIT/HEXAGON", "declassiii": "Declass III \u2014 HEXAGON"};
+const DS_EE_IDS = {"corona2": "5e839febdccb64b3", "declassii": "5e839ff7d71d4811", "declassiii": "5e7c41f3ffaaf662"};
+const eeUrl = p => 'https://earthexplorer.usgs.gov/scene/metadata/full/'
+                   + (DS_EE_IDS[p.dataset] || p.dataset) + '/' + p.entityId + '/';
 const YEAR_MIN  = 1960;
 const YEAR_MAX  = 1984;
 const YEAR_COUNTS = {"1960": 130, "1961": 680, "1962": 2236, "1963": 2588, "1964": 6131, "1965": 9780, "1966": 11840, "1967": 7875, "1968": 6281, "1969": 3419, "1970": 3308, "1971": 1764, "1972": 4164, "1973": 8558, "1974": 6150, "1975": 4666, "1976": 4219, "1977": 3597, "1978": 4528, "1979": 5597, "1980": 5445, "1981": 434, "1982": 1378, "1983": 835, "1984": 1550};
@@ -898,12 +923,21 @@ function updateCounter(n) {
 }
 
 // ── Load scene data (external file keeps index.html small) ────────────────────
+// `year` isn't stored per-feature; derive it once here so the filter stays fast.
+function hydrate(feats) {
+  for (const f of feats) {
+    const p = f.properties;
+    const y = parseInt((p.acquisitionDate || '').slice(0, 4), 10);
+    p.year = isNaN(y) ? null : y;
+  }
+}
+
 (function loadSceneData() {
   const counter = document.getElementById('counter');
   counter.textContent = 'Loading scenes…';
   fetch(DATA_URL)
     .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
-    .then(data => { GEOJSON = data; buildLayers(); })
+    .then(data => { GEOJSON = data; hydrate(GEOJSON.features); buildLayers(); })
     .catch(err => {
       console.error('Scene data load failed:', err);
       counter.textContent = 'Failed to load scenes — retrying…';
@@ -965,7 +999,7 @@ function renderPopup() {
   const p   = puFeats[puIdx].properties;
   const c   = DS_COLORS[p.dataset]||'#fff';
   const date = p.acquisitionDate ? p.acquisitionDate.slice(0,10) : '—';
-  const dsShort = p.datasetLabel.split('—')[0].trim();
+  const dsShort = (DS_LABELS[p.dataset] || p.dataset).split('—')[0].trim();
   const isUnscanned = p.scanned === false;
 
   // Availability metadata
@@ -990,9 +1024,9 @@ function renderPopup() {
     </div>` : '';
 
   const footerActions = isUnscanned
-    ? `<a href="${p.earthExplorerUrl}" target="_blank">EarthExplorer ↗</a>
+    ? `<a href="${eeUrl(p)}" target="_blank">EarthExplorer ↗</a>
        <span class="pu-unscanned-label">📷 Film not yet scanned</span>`
-    : `<a href="${p.earthExplorerUrl}" target="_blank">EarthExplorer ↗</a>
+    : `<a href="${eeUrl(p)}" target="_blank">EarthExplorer ↗</a>
        <button class="pu-dl-btn" data-eid="${p.entityId}" data-ds="${p.dataset}">⬇ Download</button>`;
 
   const mosaicDate = p.acquisitionDate?.slice(0,10) || '';
