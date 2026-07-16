@@ -348,7 +348,8 @@ def scene_to_feature_unscanned(scene, dataset, scanned_ids):
 
 def build_html(geojson):
     import re as _re, collections as _col
-    geojson_str    = json.dumps(geojson)
+    # Scene features are served from an external file (DATA_URL) so index.html
+    # stays small; only lightweight derived data is embedded below.
     generated      = geojson["metadata"]["generated"]
     total          = geojson["metadata"]["total"]
     counts         = geojson["metadata"]["counts"]
@@ -1060,7 +1061,8 @@ body{{
 </div>
 
 <script>
-const GEOJSON   = {geojson_str};
+let GEOJSON     = {{type:'FeatureCollection', features:[]}};  // populated from DATA_URL at load
+const DATA_URL  = 'https://raw.githubusercontent.com/harryspacefromspace/declass-map/main/available_scenes.geojson';
 const DS_COLORS = {ds_colors_json};
 const YEAR_MIN  = {year_min};
 const YEAR_MAX  = {year_max};
@@ -1269,7 +1271,19 @@ function updateCounter(n) {{
   document.getElementById('empty-state').classList.toggle('hidden', n > 0);
 }}
 
-buildLayers();
+// ── Load scene data (external file keeps index.html small) ────────────────────
+(function loadSceneData() {{
+  const counter = document.getElementById('counter');
+  counter.textContent = 'Loading scenes…';
+  fetch(DATA_URL)
+    .then(r => {{ if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }})
+    .then(data => {{ GEOJSON = data; buildLayers(); }})
+    .catch(err => {{
+      console.error('Scene data load failed:', err);
+      counter.textContent = 'Failed to load scenes — retrying…';
+      setTimeout(loadSceneData, 5000);
+    }});
+}})();
 
 // ── Multi-scene popup ─────────────────────────────────────────────────────────
 function ptInPoly(ll, geom) {{
@@ -2618,14 +2632,16 @@ def main():
         f.write(build_html(geojson))
     print("Saved index.html")
 
-    # Only overwrite the geojson cache when we have a clean full run
-    # so it always contains complete data for future fallback
-    if not failed:
-        with open("available_scenes.geojson", "w") as f:
-            json.dump(geojson, f)
-        print("Saved available_scenes.geojson (full run)")
+    # available_scenes.geojson is both the fallback cache AND the file the map
+    # fetches at runtime (DATA_URL), so keep it in sync with the built HTML.
+    # all_features already merges per-dataset fallbacks, so it stays complete
+    # even on a partial run. Minified to keep the served file small.
+    with open("available_scenes.geojson", "w") as f:
+        json.dump(geojson, f, separators=(",", ":"))
+    if failed:
+        print(f"Saved available_scenes.geojson (partial run — {', '.join(failed)} used fallback data)")
     else:
-        print("Skipped overwriting available_scenes.geojson (partial run — keeping previous as fallback)")
+        print("Saved available_scenes.geojson (full run)")
 
     print(f"\nDone — {len(all_features):,} scenes mapped.")
 
@@ -2644,6 +2660,11 @@ def build_only(geojson_path="available_scenes.geojson"):
     with open("index.html", "w", encoding="utf-8") as f:
         f.write(build_html(geojson))
     print("Saved index.html")
+    # Rewrite the served data file (minified) so the map fetches the freshly
+    # stamped data, and so it shrinks from any previously pretty-printed version.
+    with open(geojson_path, "w") as f:
+        json.dump(geojson, f, separators=(",", ":"))
+    print(f"Saved {geojson_path} (served data, minified)")
     print(f"\nDone — {n:,} scenes mapped (build only, no API calls).")
 
 
