@@ -154,88 +154,115 @@ def logout(api_key):
     print("  Logged out")
 
 
-def search_available(api_key, dataset, filter_id):
+# 10000 is allowed but unreliable — USGS truncates responses that large
+# ("Response ended prematurely"). Smaller batches complete far more often.
+SCENE_BATCH = 2000
+# Per-request hard wall-clock cap. requests' `timeout` is only a per-read gap,
+# so a trickling response never trips it (a single call once ran 56 minutes).
+REQUEST_HARD_CAP = 150
+
+
+class SceneSearchError(Exception):
+    """Raised when a scene-search can't be completed within its retries/deadline."""
+
+
+def _post_json_bounded(url, payload, headers, hard_timeout):
+    """POST and return parsed JSON, enforcing a hard total-time cap on the whole
+    request. Streams the body so a slow/trickling response is abandoned instead
+    of hanging until the CI job is killed."""
+    deadline = time.time() + hard_timeout
+    resp = requests.post(url, json=payload, headers=headers,
+                         timeout=(30, 60), stream=True)
+    try:
+        resp.raise_for_status()
+        chunks = []
+        for chunk in resp.iter_content(chunk_size=65536):
+            if time.time() > deadline:
+                raise SceneSearchError(f"request exceeded {hard_timeout}s hard cap")
+            chunks.append(chunk)
+    finally:
+        resp.close()
+    return json.loads(b"".join(chunks))
+
+
+def _scene_search(api_key, payload, deadline, retries=4):
+    """One scene-search call with retries and an overall fetch deadline (epoch
+    seconds). Raises SceneSearchError on deadline or repeated transient failure;
+    a genuine API errorCode is raised immediately (not retried)."""
+    headers = {"X-Auth-Token": api_key}
+    for attempt in range(retries):
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            raise SceneSearchError("fetch deadline reached")
+        try:
+            data = _post_json_bounded(
+                M2M_URL + "scene-search", payload, headers,
+                hard_timeout=min(remaining, REQUEST_HARD_CAP))
+        except (requests.exceptions.RequestException, SceneSearchError, ValueError) as e:
+            if attempt == retries - 1 or time.time() >= deadline:
+                raise SceneSearchError(f"scene-search failed after {attempt+1} tr{'y' if attempt==0 else 'ies'}: {e}")
+            wait = min(2 ** attempt, 10)
+            print(f"    transient scene-search error (attempt {attempt+1}/{retries}), retry in {wait}s: {e}")
+            time.sleep(wait)
+            continue
+        if data.get("errorCode"):
+            raise SceneSearchError(f"API error: {data['errorMessage']}")
+        return data.get("data", {}) or {}
+    raise SceneSearchError("scene-search: retries exhausted")
+
+
+def search_available(api_key, dataset, filter_id, deadline):
     all_scenes = []
     starting   = 1
-    # 10000 is allowed but unreliable — USGS truncates responses that large
-    # ("Response ended prematurely"). Smaller batches complete far more often.
-    batch      = 2000
-
     while True:
-        resp = requests.post(
-            M2M_URL + "scene-search",
-            json={
-                "datasetName":    dataset,
-                "maxResults":     batch,
-                "startingNumber": starting,
-                "metadataType": "full",
-                "sceneFilter": {
-                    "metadataFilter": {
-                        "filterType": "value",
-                        "filterId":   filter_id,
-                        "value":      "Y",
-                    }
-                },
+        data = _scene_search(api_key, {
+            "datasetName":    dataset,
+            "maxResults":     SCENE_BATCH,
+            "startingNumber": starting,
+            "metadataType":   "full",
+            "sceneFilter": {
+                "metadataFilter": {
+                    "filterType": "value",
+                    "filterId":   filter_id,
+                    "value":      "Y",
+                }
             },
-            headers={"X-Auth-Token": api_key},
-            timeout=120,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        if data.get("errorCode"):
-            print(f"    API error: {data['errorMessage']}")
-            break
+        }, deadline)
 
-        scenes = data.get("data", {}).get("results", [])
+        scenes = data.get("results", [])
         if not scenes:
             break
-
         all_scenes.extend(scenes)
         print(f"    {len(all_scenes):,} scenes retrieved...")
-
-        if len(scenes) < batch:
+        if len(scenes) < SCENE_BATCH:
             break
-        starting += batch
-        time.sleep(0.5)
+        starting += SCENE_BATCH
+        time.sleep(0.3)
 
     return all_scenes
 
 
-def search_all(api_key, dataset):
+def search_all(api_key, dataset, deadline):
     """Fetch ALL scenes for a dataset regardless of scan/availability status."""
     all_scenes = []
     starting   = 1
-    batch      = 2000   # see search_available()
-
     while True:
-        resp = requests.post(
-            M2M_URL + "scene-search",
-            json={
-                "datasetName":    dataset,
-                "maxResults":     batch,
-                "startingNumber": starting,
-                "metadataType":   "full",
-            },
-            headers={"X-Auth-Token": api_key},
-            timeout=180,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        if data.get("errorCode"):
-            print(f"    API error: {data['errorMessage']}")
-            break
+        data = _scene_search(api_key, {
+            "datasetName":    dataset,
+            "maxResults":     SCENE_BATCH,
+            "startingNumber": starting,
+            "metadataType":   "full",
+        }, deadline)
 
-        scenes = data.get("data", {}).get("results", [])
+        scenes = data.get("results", [])
         if not scenes:
             break
-
         all_scenes.extend(scenes)
         print(f"    {len(all_scenes):,} scenes retrieved...")
-
-        if len(scenes) < batch:
+        if len(scenes) < SCENE_BATCH:
             break
-        starting += batch
-        time.sleep(0.5)
+        starting += SCENE_BATCH
+        time.sleep(0.3)
 
     return all_scenes
 
@@ -2823,13 +2850,21 @@ def main():
     print("Logging in to USGS M2M API...")
     api_key = login(username, token)
 
+    # Hard cap on all M2M fetching so a slow/flaky USGS can't hang the build
+    # until CI kills it. Once passed, remaining searches raise and fall back to
+    # the previous run's data — the map still gets built. Overridable via env
+    # for manual runs; default leaves headroom under the 60-min CI step.
+    fetch_budget = int(os.environ.get("FETCH_BUDGET_SECONDS", "2400"))
+    deadline = time.time() + fetch_budget
+    print(f"  Fetch budget: {fetch_budget // 60} min")
+
     all_features = []
     failed = []
     try:
         for dataset, filter_id in DATASETS.items():
             print(f"\n  {DATASET_LABELS[dataset]}...")
             try:
-                scenes = search_available(api_key, dataset, filter_id)
+                scenes = search_available(api_key, dataset, filter_id, deadline)
                 fresh = []
                 for scene in scenes:
                     f = scene_to_feature(scene, dataset)
@@ -2853,7 +2888,7 @@ def main():
             scanned_ids = {f["properties"]["entityId"]
                            for f in all_features
                            if f["properties"]["dataset"] == "declassii"}
-            all_declassii = search_all(api_key, "declassii")
+            all_declassii = search_all(api_key, "declassii", deadline)
             unscanned = []
             for scene in all_declassii:
                 f = scene_to_feature_unscanned(scene, "declassii", scanned_ids)
