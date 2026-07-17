@@ -157,7 +157,9 @@ def logout(api_key):
 def search_available(api_key, dataset, filter_id):
     all_scenes = []
     starting   = 1
-    batch      = 10000
+    # 10000 is allowed but unreliable — USGS truncates responses that large
+    # ("Response ended prematurely"). Smaller batches complete far more often.
+    batch      = 2000
 
     while True:
         resp = requests.post(
@@ -203,7 +205,7 @@ def search_all(api_key, dataset):
     """Fetch ALL scenes for a dataset regardless of scan/availability status."""
     all_scenes = []
     starting   = 1
-    batch      = 10000
+    batch      = 2000   # see search_available()
 
     while True:
         resp = requests.post(
@@ -2621,7 +2623,7 @@ setInterval(checkUsgsStatus, 60_000);
   const to   = params.get('to') || params.get('from');
   const mmdd = params.get('mmdd'); // MM-DD only filter e.g. ?mmdd=07-13
 
-  if (mmdd && /^\d{{2}}-\d{{2}}$/.test(mmdd)) {{
+  if (mmdd && /^\\d{{2}}-\\d{{2}}$/.test(mmdd)) {{
     filterMMDD = mmdd;
     buildLayers();
     // Open date dropdown so user can see something is active

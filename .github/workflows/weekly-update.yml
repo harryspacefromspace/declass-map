@@ -41,11 +41,18 @@ jobs:
           }
           CONFIGEOF
 
+      # USGS scene-search is flaky and can truncate mid-response. If the monitor
+      # can't finish, we still want the map rebuilt — fetch_and_build.py has its
+      # own per-dataset fallback and reads whatever scenes.db already has, so a
+      # monitor failure should only cost us new-scene detection, not the update.
       - name: Step 1 — Run monitoring script (updates scenes.db)
         run: python monitor.py
+        continue-on-error: true
+        timeout-minutes: 45
 
       - name: Step 2 — Build map from scenes.db
         run: python fetch_and_build.py
+        timeout-minutes: 60
         env:
           M2M_USERNAME: ${{ secrets.M2M_USERNAME }}
           M2M_TOKEN: ${{ secrets.M2M_TOKEN }}

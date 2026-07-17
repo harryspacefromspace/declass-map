@@ -470,12 +470,20 @@ class USGSClient:
         self.token = token
         self.api_key: Optional[str] = None
     
-    def _request(self, endpoint: str, data: dict = None, _retries: int = 5) -> dict:
-        """Make API request with exponential backoff on transient errors."""
+    def _request(self, endpoint: str, data: dict = None, _retries: int = 5,
+                 _budget: float = 1200) -> dict:
+        """Make API request with exponential backoff on transient errors.
+
+        NOTE: requests' `timeout` below is a per-read gap, NOT a total cap. A
+        trickling USGS response can run for the best part of an hour without
+        tripping it and still die mid-body, so the retry loop also enforces
+        `_budget` seconds of wall clock across all attempts for one call.
+        """
         headers = {}
         if self.api_key:
             headers["X-Auth-Token"] = self.api_key
 
+        started = time.monotonic()
         last_exc = None
         for attempt in range(_retries):
             try:
@@ -501,11 +509,18 @@ class USGSClient:
                 requests.exceptions.HTTPError,
             ) as exc:
                 last_exc = exc
+                elapsed = time.monotonic() - started
+                if elapsed >= _budget:
+                    logger.error(
+                        f"Giving up on {endpoint} after {elapsed/60:.1f} min "
+                        f"(budget {_budget/60:.0f} min, attempt {attempt+1}/{_retries}): {exc}"
+                    )
+                    raise last_exc
                 if attempt < _retries - 1:
                     wait = 2 ** attempt
                     logger.warning(
-                        f"Transient error on {endpoint} (attempt {attempt+1}/{_retries}), "
-                        f"retrying in {wait}s: {exc}"
+                        f"Transient error on {endpoint} (attempt {attempt+1}/{_retries}, "
+                        f"{elapsed/60:.1f} min elapsed), retrying in {wait}s: {exc}"
                     )
                     time.sleep(wait)
                 else:
@@ -537,7 +552,10 @@ class USGSClient:
         
         all_scenes = []
         starting_number = 1
-        batch_size = 10000  # API max per request
+        # The API allows 10000, but a response that large is unreliable — USGS
+        # trickles it out and truncates mid-body ("Response ended prematurely"),
+        # which stalled a run for 2h+. Smaller batches complete far more often.
+        batch_size = 2000
         
         while True:
             result = self._request("scene-search", {
