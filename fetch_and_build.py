@@ -222,14 +222,22 @@ def _scene_search(api_key, payload, deadline, retries=4):
     return _m2m(api_key, "scene-search", payload, deadline, retries) or {}
 
 
-def get_metadata_filter_id(api_key, dataset, field_label, deadline):
-    """Discover the metadata filterId for a named field (e.g. 'Mission') so we
-    can filter a scene-search server-side. Returns None if not found."""
+def get_metadata_filter_id(api_key, dataset, field_terms, deadline):
+    """Discover the metadata filterId whose field label contains any of
+    field_terms (case-insensitive substring), so we can filter a scene-search
+    server-side. Logs the available labels and returns None if nothing matches,
+    so the run log tells us what the field is actually called."""
     data = _m2m(api_key, "dataset-filters", {"datasetName": dataset}, deadline)
-    want = field_label.strip().lower()
-    for filt in (data or []):
-        if (filt.get("fieldLabel") or "").strip().lower() == want:
+    filters = data or []
+    terms = [t.lower() for t in field_terms]
+    labels = []
+    for filt in filters:
+        label = (filt.get("fieldLabel") or "").strip()
+        labels.append(label)
+        if any(t in label.lower() for t in terms):
+            print(f"    matched {dataset} filter '{label}' (id {filt.get('id')})")
             return filt.get("id")
+    print(f"    no {field_terms} filter for {dataset}; available fields: {labels}")
     return None
 
 
@@ -3300,7 +3308,7 @@ def main():
         # LANYARD missions server-side instead of pulling the whole dataset.
         print(f"\n  Declass I — unscanned KH-6 (LANYARD) frames...")
         try:
-            mission_fid = get_metadata_filter_id(api_key, "corona2", "Mission", deadline)
+            mission_fid = get_metadata_filter_id(api_key, "corona2", ["mission"], deadline)
             if not mission_fid:
                 print("  Could not find a Mission filter for corona2 — skipping KH-6")
             else:
