@@ -40,6 +40,10 @@ DATASET_IDS = {
     "declassiii": "5e7c41f3ffaaf662",
 }
 
+# KH-6 (LANYARD) flew three missions; get_satellite_type maps 8001–8003 to KH-6.
+# Used to pull unscanned LANYARD frames out of the large corona2 dataset.
+LANYARD_MISSIONS = ["8001", "8002", "8003"]
+
 # Satellite display order
 SAT_ORDER = [
     "KH-1", "KH-2", "KH-3", "KH-4", "KH-4A", "KH-4B",
@@ -185,10 +189,12 @@ def _post_json_bounded(url, payload, headers, hard_timeout):
     return json.loads(b"".join(chunks))
 
 
-def _scene_search(api_key, payload, deadline, retries=4):
-    """One scene-search call with retries and an overall fetch deadline (epoch
+def _m2m(api_key, endpoint, payload, deadline, retries=4):
+    """One M2M API call with retries and an overall fetch deadline (epoch
     seconds). Raises SceneSearchError on deadline or repeated transient failure;
-    a genuine API errorCode is raised immediately (not retried)."""
+    a genuine API errorCode is raised immediately (not retried). Returns the
+    endpoint's `data` payload (a dict for scene-search, a list for
+    dataset-filters, etc.)."""
     headers = {"X-Auth-Token": api_key}
     for attempt in range(retries):
         remaining = deadline - time.time()
@@ -196,19 +202,35 @@ def _scene_search(api_key, payload, deadline, retries=4):
             raise SceneSearchError("fetch deadline reached")
         try:
             data = _post_json_bounded(
-                M2M_URL + "scene-search", payload, headers,
+                M2M_URL + endpoint, payload, headers,
                 hard_timeout=min(remaining, REQUEST_HARD_CAP))
         except (requests.exceptions.RequestException, SceneSearchError, ValueError) as e:
             if attempt == retries - 1 or time.time() >= deadline:
-                raise SceneSearchError(f"scene-search failed after {attempt+1} tr{'y' if attempt==0 else 'ies'}: {e}")
+                raise SceneSearchError(f"{endpoint} failed after {attempt+1} tr{'y' if attempt==0 else 'ies'}: {e}")
             wait = min(2 ** attempt, 10)
-            print(f"    transient scene-search error (attempt {attempt+1}/{retries}), retry in {wait}s: {e}")
+            print(f"    transient {endpoint} error (attempt {attempt+1}/{retries}), retry in {wait}s: {e}")
             time.sleep(wait)
             continue
         if data.get("errorCode"):
             raise SceneSearchError(f"API error: {data['errorMessage']}")
-        return data.get("data", {}) or {}
-    raise SceneSearchError("scene-search: retries exhausted")
+        return data.get("data")
+    raise SceneSearchError(f"{endpoint}: retries exhausted")
+
+
+def _scene_search(api_key, payload, deadline, retries=4):
+    """scene-search wrapper returning the results dict ({} if absent)."""
+    return _m2m(api_key, "scene-search", payload, deadline, retries) or {}
+
+
+def get_metadata_filter_id(api_key, dataset, field_label, deadline):
+    """Discover the metadata filterId for a named field (e.g. 'Mission') so we
+    can filter a scene-search server-side. Returns None if not found."""
+    data = _m2m(api_key, "dataset-filters", {"datasetName": dataset}, deadline)
+    want = field_label.strip().lower()
+    for filt in (data or []):
+        if (filt.get("fieldLabel") or "").strip().lower() == want:
+            return filt.get("id")
+    return None
 
 
 def search_available(api_key, dataset, filter_id, deadline):
@@ -252,6 +274,39 @@ def search_all(api_key, dataset, deadline):
             "maxResults":     SCENE_BATCH,
             "startingNumber": starting,
             "metadataType":   "full",
+        }, deadline)
+
+        scenes = data.get("results", [])
+        if not scenes:
+            break
+        all_scenes.extend(scenes)
+        print(f"    {len(all_scenes):,} scenes retrieved...")
+        if len(scenes) < SCENE_BATCH:
+            break
+        starting += SCENE_BATCH
+        time.sleep(0.3)
+
+    return all_scenes
+
+
+def search_by_missions(api_key, dataset, mission_filter_id, missions, deadline):
+    """Fetch all scenes for the given mission values (server-side metadata
+    filter), regardless of scan/availability status. Used to pull a small
+    subset out of a large dataset — e.g. KH-6 (LANYARD) from corona2."""
+    child = [{"filterType": "value", "filterId": mission_filter_id, "value": m}
+             for m in missions]
+    metadata_filter = (child[0] if len(child) == 1
+                       else {"filterType": "or", "childFilters": child})
+
+    all_scenes = []
+    starting   = 1
+    while True:
+        data = _scene_search(api_key, {
+            "datasetName":    dataset,
+            "maxResults":     SCENE_BATCH,
+            "startingNumber": starting,
+            "metadataType":   "full",
+            "sceneFilter":    {"metadataFilter": metadata_filter},
         }, deadline)
 
         scenes = data.get("results", [])
@@ -2898,6 +2953,32 @@ def main():
             print(f"  {len(unscanned):,} unscanned KH-7 features added")
         except Exception as e:
             print(f"  WARNING: unscanned KH-7 fetch failed — {e}")
+
+        # Fetch unscanned KH-6 (LANYARD) frames. Unlike declassii (all KH-7/9),
+        # corona2 is huge and mostly other satellites, so filter to the three
+        # LANYARD missions server-side instead of pulling the whole dataset.
+        print(f"\n  Declass I — unscanned KH-6 (LANYARD) frames...")
+        try:
+            mission_fid = get_metadata_filter_id(api_key, "corona2", "Mission", deadline)
+            if not mission_fid:
+                print("  Could not find a Mission filter for corona2 — skipping KH-6")
+            else:
+                kh6_scanned = {f["properties"]["entityId"] for f in all_features
+                               if f["properties"]["dataset"] == "corona2"
+                               and f["properties"].get("satellite") == "KH-6 (LANYARD)"}
+                lanyard = search_by_missions(api_key, "corona2", mission_fid,
+                                             LANYARD_MISSIONS, deadline)
+                added = 0
+                for scene in lanyard:
+                    f = scene_to_feature_unscanned(scene, "corona2", kh6_scanned)
+                    # Guard against the mission filter returning anything unexpected
+                    if f and f["properties"].get("satellite") == "KH-6 (LANYARD)":
+                        all_features.append(f)
+                        added += 1
+                print(f"  {added:,} unscanned KH-6 features added "
+                      f"(from {len(lanyard):,} LANYARD scenes returned)")
+        except Exception as e:
+            print(f"  WARNING: unscanned KH-6 fetch failed — {e}")
 
     finally:
         logout(api_key)
