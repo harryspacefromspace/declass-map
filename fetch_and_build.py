@@ -484,9 +484,9 @@ import os, sys, json, time, getpass, urllib.request, urllib.error
 
 API    = "https://m2m.cr.usgs.gov/api/api/json/stable/"
 OUTDIR = "declass_downloads"
-LABEL  = "declass_map_cart"
+LABEL  = "declass_map_queue"
 
-# Scenes selected in the cart:
+# Scenes in the download queue:
 SCENES = __SCENES__
 
 
@@ -508,7 +508,7 @@ def api(endpoint, payload, token=None):
 
 def main():
     if not SCENES:
-        print("Cart is empty - nothing to download.")
+        print("Queue is empty - nothing to download.")
         return
     user  = os.environ.get("M2M_USERNAME") or input("USGS username: ").strip()
     token = os.environ.get("M2M_TOKEN") or getpass.getpass("M2M application token: ").strip()
@@ -540,7 +540,7 @@ def main():
                     print("  ! no downloadable product for %s" % eid)
 
         if not downloads:
-            sys.exit("None of the cart scenes have a downloadable product.")
+            sys.exit("None of the queued scenes have a downloadable product.")
 
         print("Requesting %d download(s) ..." % len(downloads))
         req = api("download-request", {"downloads": downloads, "label": LABEL}, api_key) or {}
@@ -1165,7 +1165,7 @@ body{{
 #dl-cancel:hover{{border-color:#888;color:#ddd;background:#2a2a2a}}
 #dl-save-creds{{font-size:11px;color:#666;display:flex;align-items:center;gap:6px;margin-top:12px;cursor:pointer}}
 
-/* ── Download cart ── */
+/* ── Download queue ── */
 #cart-btn{{position:relative}}
 #cart-btn.on{{background:#3a2a12;border-color:#e0913f88;color:#ffb74d}}
 .pu-cart-btn{{
@@ -1427,7 +1427,7 @@ body{{
   <!-- Basemap dropdown -->
   <button id="reset-btn">Reset</button>
   <div id="view-group">
-    <button id="cart-btn" class="bm-btn" title="Download cart — build a batch download script">🛒 Cart</button>
+    <button id="cart-btn" class="bm-btn" title="Download queue — build a batch download script">⬇ Queue</button>
     <button id="sb-toggle" class="bm-btn" title="List the scenes drawn on the map">☰ List</button>
     <button id="globe-btn" class="bm-btn" title="Switch to globe view">🌐 Globe</button>
     <span style="width:1px;height:16px;background:#3a3a3a;margin:0 2px;display:inline-block"></span>
@@ -1528,17 +1528,17 @@ body{{
   </div>
 </div>
 
-<!-- Download cart modal -->
+<!-- Download queue modal -->
 <div id="cart-modal">
   <div id="cart-box">
     <div class="cart-head">
-      <h4>Download cart <span id="cart-count-lbl"></span></h4>
+      <h4>Download queue <span id="cart-count-lbl"></span></h4>
       <button id="cart-close" title="Close">✕</button>
     </div>
     <div id="cart-list"></div>
-    <div id="cart-empty">Your cart is empty.<br>Click a scene and press <strong>＋ Cart</strong>, or add scenes from the List panel.</div>
+    <div id="cart-empty">Your download queue is empty.<br>Click a scene and press <strong>＋ Queue</strong>, or add scenes from the List panel.</div>
     <div class="cart-note">
-      Builds a Python script that batch-downloads the selected scenes from USGS M2M.
+      Builds a Python script that downloads every queued scene from USGS M2M.
       You'll need a free M2M application token — <a href="https://ers.cr.usgs.gov/" target="_blank">get one ↗</a>.
       No Python packages required.
     </div>
@@ -1602,6 +1602,10 @@ const GLOBE_TILES = {{
 function applyGlobeBasemap() {{
   if (!globeInstance) return;
   const fn = GLOBE_TILES[currentBm] || GLOBE_TILES.dark;
+  // Cached tiles are keyed by position, not by source, so swapping the URL
+  // alone left the old basemap on screen until you happened to drag somewhere
+  // new. Clearing the cache makes it refetch the current view immediately.
+  try {{ globeInstance.globeTileEngineClearCache(); }} catch (e) {{}}
   globeInstance.globeImageUrl(null).globeTileEngineUrl(fn);
 }}
 
@@ -2002,7 +2006,7 @@ function renderPopup() {{
     ? `<a href="${{eeUrl(p)}}" target="_blank">EarthExplorer ↗</a>
        <span class="pu-unscanned-label">📷 Film not yet scanned</span>`
     : `<a href="${{eeUrl(p)}}" target="_blank">EarthExplorer ↗</a>
-       <button class="pu-cart-btn" data-eid="${{p.entityId}}">${{cartHas(p.entityId) ? '✓ In cart' : '＋ Cart'}}</button>
+       <button class="pu-cart-btn" data-eid="${{p.entityId}}">${{cartHas(p.entityId) ? '✓ Queued' : '＋ Queue'}}</button>
        <button class="pu-dl-btn" data-eid="${{p.entityId}}" data-ds="${{p.dataset}}">⬇ Download</button>`;
 
   const mosaicDate = p.acquisitionDate?.slice(0,10) || '';
@@ -2163,7 +2167,7 @@ function updateSidebar(resetPage) {{
     // Cart toggle (downloadable scenes only); string-built to avoid nested templates
     const cartCell = p.scanned === false ? '' :
       '<button class="sb-cart ' + (cartHas(p.entityId) ? 'in' : '') + '" data-eid="' +
-      p.entityId + '" title="Add to download cart">' + (cartHas(p.entityId) ? '✓' : '＋') + '</button>';
+      p.entityId + '" title="Add to download queue">' + (cartHas(p.entityId) ? '✓' : '＋') + '</button>';
     return `<div class="sb-item" data-i="${{i}}">
       ${{thumb}}
       <div class="sb-meta">
@@ -2230,7 +2234,7 @@ document.getElementById('sb-more').addEventListener('click', () => {{
 // Only recompute on pan/zoom when the list is actually view-limited
 map.on('moveend', () => {{ if (sbOpen && sbInView) updateSidebar(true); }});
 
-// ── Download cart ─────────────────────────────────────────────────────────────
+// ── Download queue ────────────────────────────────────────────────────────────
 const CART_KEY = 'declass_cart_v1';
 const cart = new Map();   // entityId -> {{entityId, dataset, satellite, acquisitionDate}}
 try {{
@@ -2255,13 +2259,13 @@ function cartToggle(p) {{ if (cartHas(p.entityId)) cartRemove(p.entityId); else 
 function reflectCartBtn(btn) {{
   const inCart = cartHas(btn.dataset.eid);
   btn.classList.toggle('in', inCart);
-  btn.textContent = inCart ? '✓ In cart' : '＋ Cart';
+  btn.textContent = inCart ? '✓ Queued' : '＋ Queue';
 }}
 
 function updateCartUI() {{
   const n = cart.size;
   const btn = document.getElementById('cart-btn');
-  btn.textContent = '🛒 Cart' + (n ? ' (' + n + ')' : '');
+  btn.textContent = '⬇ Queue' + (n ? ' (' + n + ')' : '');
   btn.classList.toggle('on', n > 0);
   const pc = popup.getElement && popup.getElement() && popup.getElement().querySelector('.pu-cart-btn');
   if (pc) reflectCartBtn(pc);
@@ -2303,7 +2307,7 @@ document.getElementById('cart-list').addEventListener('click', e => {{
   if (rm) cartRemove(rm.dataset.eid);
 }});
 document.getElementById('cart-clear').addEventListener('click', () => {{
-  if (cart.size && confirm('Remove all ' + cart.size + ' scene(s) from the cart?')) {{
+  if (cart.size && confirm('Remove all ' + cart.size + ' scene(s) from the download queue?')) {{
     cart.clear(); cartSave(); updateCartUI();
   }}
 }});
@@ -3386,7 +3390,9 @@ function restoreView() {{
 // 3,000 and unusable beyond. The heatmap is a single batched layer and holds
 // 60fps with the whole archive. So: heatmap while the view is crowded, real
 // footprints once few enough are actually on screen.
-const GLOBE_POLY_CAP = 1200;
+// Measured: 500 polys ~59fps, 1000 ~28, 1500 ~18, 3000 ~10. 1500 is the point
+// where dragging is still usable; past that it turns to slideshow.
+const GLOBE_POLY_CAP = 1500;
 let globeFeats = [];      // current selection, minus date-line crossers
 let globeHeatPts = [];    // [lng, lat] per feature, rebuilt only on filter change
 let globeLayerMode = '';
@@ -3404,11 +3410,22 @@ function featCentroid(f) {{
 function visibleAngle(altitude) {{
   const d = 1 + Math.max(altitude, 0.001);
   const horizon = Math.acos(Math.min(1, 1 / d));
-  let fov = 50;
-  try {{ fov = globeInstance.camera().fov || 50; }} catch (e) {{}}
-  const a = (fov / 2) * Math.PI / 180;
+  let fov = 50, aspect = 1.6;
+  try {{
+    const cam = globeInstance.camera();
+    fov = cam.fov || 50;
+    aspect = cam.aspect || 1.6;
+  }} catch (e) {{}}
+  // camera.fov is the VERTICAL angle, but the screen corners reach a good deal
+  // further — using the vertical angle alone left the edges of the view empty.
+  // Corner half-angle: atan(tan(fov/2) * sqrt(1 + aspect^2)).
+  const halfV = (fov / 2) * Math.PI / 180;
+  const corner = Math.atan(Math.tan(halfV) * Math.sqrt(1 + aspect * aspect));
+  // plus a margin, since a footprint whose centre is off-screen can still have
+  // most of its area on-screen
+  const a = Math.min(corner * 1.2, Math.PI / 2 - 1e-6);
   const s = d * Math.sin(a);
-  if (s >= 1) return horizon;                       // FOV overshoots the globe
+  if (s >= 1) return horizon;                       // cone overshoots the globe
   const theta = Math.PI - a - (Math.PI - Math.asin(s));
   return Math.max(0, Math.min(theta, horizon));
 }}
