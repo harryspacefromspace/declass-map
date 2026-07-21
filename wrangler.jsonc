@@ -4,6 +4,14 @@
   "main": "worker.js",
   "compatibility_date": "2026-07-01",
 
+  // Access policies apply to a hostname, so every OTHER hostname that reaches
+  // this Worker is an unauthenticated way in. Both of these are on by default:
+  //   workers_dev  -> declass-map.<subdomain>.workers.dev
+  //   preview_urls -> a public URL per deployment
+  // Turned off so declass-map.spacefromspace.com is the only front door.
+  "workers_dev": false,
+  "preview_urls": false,
+
   "assets": {
     // Only ./dist is published. The repo root also holds scenes.db, monitor.py
     // and the raw scene file, none of which should ever be served — build-dist
