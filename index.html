@@ -1068,9 +1068,11 @@ const SEQ_PATS = {
     /^DS(\d{6})(\d{3})([A-Z]{2})(\d+)$/,
     /^DS(\d{4})-(\d{4})([A-Z]{2})(\d+)$/
   ],
+  // Declass II ends in two 3-digit fields: frame, then a sub-frame counter
+  // that is 001 on ~97% of scenes. Only the first is the frame number.
   declassii: [
-    /^DZ[BC](\d{4})-(\d{6})([A-Z])(\d+)$/,
-    /^DZ[BC](\d{6})(\d{5})([A-Z])(\d+)$/
+    /^DZ[BC](\d{4})-(\d{6})([A-Z])(\d{3})(\d{3})$/,
+    /^DZ[BC](\d{6})(\d{5})([A-Z])(\d{3})(\d{3})$/
   ],
   declassiii: [
     /^D3C(\d+)-(\d+)([A-Z])(\d+)$/
@@ -1080,9 +1082,28 @@ function parseSeq(entityId, dataset) {
   const pats = SEQ_PATS[dataset] || [];
   for (const re of pats) {
     const m = entityId.match(re);
-    if (m) return {seq: parseInt(m[2], 10), frame: parseInt(m[4], 10)};
+    if (m) return {seq: parseInt(m[2], 10), frame: parseInt(m[4], 10), code: m[3]};
   }
   return null;
+}
+
+// USGS calls the digits+letter a "Direction Flag" (e.g. 053D): the digits are
+// the revolution number, the letter the direction — D descending, A ascending.
+// CORONA's two-letter codes are <direction><camera position>, so the direction
+// is the first letter. On KH-4A/4B the flag is 4 digits: <recovery bucket 1-2>
+// followed by the revolution.
+function dirFlag(p) {
+  if (p.seq == null || !p.seqCode || p.seqCode.length !== 2) return null;
+  const d = p.seqCode[0];
+  if (d !== 'A' && d !== 'D') return null;
+  const wide = p.seq > 999;                       // KH-4A/4B: bucket + rev
+  const rev = wide ? p.seq % 1000 : p.seq;
+  const bucket = wide ? Math.floor(p.seq / 1000) : null;
+  return {
+    rev: rev, bucket: bucket, dir: d,
+    label: d === 'A' ? 'ascending' : 'descending',
+    flag: String(p.seq).padStart(3, '0') + d
+  };
 }
 
 // True flight order. Date first: sequence segments are only reliable *within*
@@ -1108,6 +1129,7 @@ function hydrate(feats) {
     const s = parseSeq(p.entityId || '', p.dataset);
     p.seq = s ? s.seq : null;
     p.frame = s ? s.frame : null;
+    p.seqCode = s ? s.code : null;
   }
 }
 
@@ -1181,8 +1203,23 @@ function renderPopup() {
   const dsShort = (DS_LABELS[p.dataset] || p.dataset).split('—')[0].trim();
   const isUnscanned = p.scanned === false;
 
+  // Identity: mission + frame, and the USGS direction flag where we can read it
+  let idBits = [];
+  if (p.mission) idBits.push(`Mission ${p.mission}`);
+  if (p.frame != null) idBits.push(`frame ${String(p.frame).padStart(3,'0')}`);
+  if (p.camera) idBits.push(p.camera);
+  let metaHtml = idBits.length ? `🎞 ${idBits.join(' · ')}<br>` : '';
+
+  const df = dirFlag(p);
+  if (df) {
+    metaHtml += `<span title="USGS Direction Flag — revolution number plus direction">`
+      + `🧭 Rev ${df.rev} · ${df.label}`
+      + (df.bucket ? ` · bucket ${df.bucket}` : '')
+      + ` <span style="color:#555">(${df.flag})</span></span><br>`;
+  }
+
   // Availability metadata
-  let metaHtml = `📅 Acquired ${date}`;
+  metaHtml += `📅 Acquired ${date}`;
   if (p.publishDate) metaHtml += `<br>📥 USGS published ${p.publishDate}`;
   const fsa = p.firstSeenAvailable;
   if (fsa && fsa > AVAIL_SEED) {
