@@ -222,25 +222,6 @@ def _scene_search(api_key, payload, deadline, retries=4):
     return _m2m(api_key, "scene-search", payload, deadline, retries) or {}
 
 
-def get_metadata_filter_id(api_key, dataset, field_terms, deadline):
-    """Discover the metadata filterId whose field label contains any of
-    field_terms (case-insensitive substring), so we can filter a scene-search
-    server-side. Logs the available labels and returns None if nothing matches,
-    so the run log tells us what the field is actually called."""
-    data = _m2m(api_key, "dataset-filters", {"datasetName": dataset}, deadline)
-    filters = data or []
-    terms = [t.lower() for t in field_terms]
-    labels = []
-    for filt in filters:
-        label = (filt.get("fieldLabel") or "").strip()
-        labels.append(label)
-        if any(t in label.lower() for t in terms):
-            print(f"    matched {dataset} filter '{label}' (id {filt.get('id')})")
-            return filt.get("id")
-    print(f"    no {field_terms} filter for {dataset}; available fields: {labels}")
-    return None
-
-
 def search_available(api_key, dataset, filter_id, deadline):
     all_scenes = []
     starting   = 1
@@ -388,8 +369,14 @@ def get_mission_from_entity(entity_id, dataset):
         if m:
             return str(int(m.group(1)))
     elif dataset == "declassii":
+        # Hyphenated: DZB1216-500523L001001 -> 1216
         m = re.match(r'DZ[BC](\d+)-', entity_id)
         if m: return m.group(1)
+        # Non-hyphenated GAMBIT: DZB00403800118H006001 -> 4038. Without this
+        # 17,609 scenes had no mission at all, and dropping full metadata would
+        # have cost them their satellite type too.
+        m = re.match(r'DZ[BC](\d{6})\d{5}[A-Z]\d{6}$', entity_id)
+        if m: return str(int(m.group(1)))
     elif dataset == "declassiii":
         m = re.match(r'D3C(\d+)-', entity_id)
         if m: return m.group(1)
