@@ -949,6 +949,15 @@ body{{
 #globe-wrap{{flex:1;position:relative;background:#000014;overflow:hidden;display:none;min-width:0}}
 #globe-wrap.on{{display:block}}
 #globe-container{{position:absolute;inset:0}}
+.globe-bub{{
+  display:flex;align-items:center;justify-content:center;border-radius:50%;
+  background:rgba(232,163,61,.17);border:1.5px solid rgba(232,163,61,.9);
+  color:#ffeccb;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-weight:600;font-variant-numeric:tabular-nums;cursor:pointer;
+  transition:background .12s,transform .12s;backdrop-filter:blur(1px);
+  text-shadow:0 1px 2px rgba(0,0,0,.6);user-select:none;
+}}
+.globe-bub:hover{{background:rgba(232,163,61,.34);transform:scale(1.09)}}
 #globe-hud{{
   position:absolute;bottom:20px;left:50%;transform:translateX(-50%);z-index:5;
   background:rgba(18,18,18,.92);backdrop-filter:blur(8px);
@@ -3395,7 +3404,97 @@ function restoreView() {{
 const GLOBE_POLY_CAP = 1500;
 let globeFeats = [];      // current selection, minus date-line crossers
 let globeHeatPts = [];    // [lng, lat] per feature, rebuilt only on filter change
+let globeCells = [];      // coarse {{lat,lng,n}} bins, used to build count bubbles
 let globeLayerMode = '';
+
+// Single hue ramping through lightness, rather than a rainbow: denser always
+// reads as brighter. Low densities fade out so the globe isn't washed in colour.
+function heatColor(t) {{
+  // globe.gl calls this with no value while the layer initialises
+  const raw = isFinite(t) ? Math.max(0, Math.min(1, t)) : 0;
+  // Coverage is heavily skewed — a handful of cells dwarf the rest — so a
+  // linear ramp leaves most of the map in the near-black end and only the
+  // peaks visible. Gamma-lift so moderate density still reads.
+  const s = Math.pow(raw, 0.7);
+  // Alpha climbs quickly: most cells sit low in the range, so a slow ramp left
+  // almost the whole field invisible.
+  const stops = [[26,22,70,0.00], [78,40,120,0.62], [168,60,96,0.82],
+                 [232,124,46,0.92], [252,204,124,0.97], [255,248,232,1.00]];
+  const f = s * (stops.length - 1);
+  const i = Math.min(stops.length - 2, Math.floor(f)), k = f - i;
+  const a = stops[i], b = stops[i + 1];
+  const mix = n => Math.round(a[n] + (b[n] - a[n]) * k);
+  const alpha = (a[3] + (b[3] - a[3]) * k) * heatDim;
+  return 'rgba(' + mix(0) + ',' + mix(1) + ',' + mix(2) + ',' + alpha.toFixed(3) + ')';
+}}
+
+// Zoomed right out the heatmap IS the information. Zoomed in, the whole view is
+// dense so it just saturates — fade it back there and let the counts carry it.
+let heatDim = 1, heatDimApplied = -1;
+function heatDimFor(altitude) {{
+  const t = Math.max(0, Math.min(1, (altitude - 0.25) / 1.05));
+  return 0.3 + 0.7 * t;
+}}
+
+// Coarse bins over the current selection; clustered per camera move to make
+// the count bubbles. Binning first keeps clustering cheap on 100k+ scenes.
+function buildGlobeCells() {{
+  const step = 2, m = new Map();
+  for (const f of globeFeats) {{
+    const c = featCentroid(f);
+    if (!c) continue;
+    const gx = Math.floor((c[1] + 180) / step), gy = Math.floor((c[0] + 90) / step);
+    const k = gx + ',' + gy;
+    let e = m.get(k);
+    if (!e) m.set(k, e = {{lat: (gy + 0.5) * step - 90, lng: (gx + 0.5) * step - 180, n: 0}});
+    e.n++;
+  }}
+  globeCells = [...m.values()];
+}}
+
+// Greedy clustering by angular distance, seeded from the busiest bin. The
+// threshold scales with the visible angle, so bubbles stay evenly spaced on
+// screen at any zoom — the same idea as screen-space marker clustering.
+function clusterCells(maxAngle, pov) {{
+  // Only cluster what's on screen. Clustering the whole globe produced
+  // thousands of groups when zoomed in, nearly all of them behind the horizon.
+  const D = Math.PI / 180;
+  // Stop short of the limb: the surface is edge-on there, so bubbles pile up in
+  // a crowded rim however well they're spaced in angular terms.
+  const cosView = Math.cos(Math.min(Math.PI / 2, (maxAngle / 0.24) * 0.85));
+  const vla = pov.lat * D, vlo = pov.lng * D;
+  const vs = Math.sin(vla), vc = Math.cos(vla);
+  const pts = globeCells.filter(c => {{
+    const la = c.lat * D, lo = c.lng * D;
+    return vs * Math.sin(la) + vc * Math.cos(la) * Math.cos(lo - vlo) >= cosView;
+  }}).sort((a, b) => b.n - a.n);
+  const used = new Array(pts.length).fill(false);
+  const cosT = Math.cos(maxAngle);
+  const out = [];
+  for (let i = 0; i < pts.length; i++) {{
+    if (used[i]) continue;
+    used[i] = true;
+    const la1 = pts[i].lat * D, lo1 = pts[i].lng * D;
+    const s1 = Math.sin(la1), c1 = Math.cos(la1);
+    let sx = 0, sy = 0, sz = 0, tot = 0;
+    const add = q => {{
+      const la = q.lat * D, lo = q.lng * D, cl = Math.cos(la);
+      sx += cl * Math.cos(lo) * q.n; sy += cl * Math.sin(lo) * q.n; sz += Math.sin(la) * q.n;
+      tot += q.n;
+    }};
+    add(pts[i]);
+    for (let j = i + 1; j < pts.length; j++) {{
+      if (used[j]) continue;
+      const la2 = pts[j].lat * D, lo2 = pts[j].lng * D;
+      if (s1 * Math.sin(la2) + c1 * Math.cos(la2) * Math.cos(lo2 - lo1) >= cosT) {{
+        used[j] = true; add(pts[j]);
+      }}
+    }}
+    const len = Math.sqrt(sx * sx + sy * sy + sz * sz) || 1;
+    out.push({{lat: Math.asin(sz / len) / D, lng: Math.atan2(sy, sx) / D, n: tot}});
+  }}
+  return out;
+}}
 
 function featCentroid(f) {{
   if (f._cc !== undefined) return f._cc;
@@ -3451,27 +3550,38 @@ function refreshGlobeLayers() {{
 
   if (!globeFeats.length) {{
     if (globeLayerMode !== 'empty') {{
-      globeInstance.polygonsData([]).heatmapsData([]);
+      globeInstance.polygonsData([]).heatmapsData([]).htmlElementsData([]);
       globeLayerMode = 'empty';
     }}
     if (hud) hud.textContent = '0 of ' + total + ' scenes';
     return;
   }}
 
-  const inView = featsInView(globeInstance.pointOfView());
+  const pov = globeInstance.pointOfView();
+  const inView = featsInView(pov);
   if (inView.length <= GLOBE_POLY_CAP) {{
-    globeInstance.heatmapsData([]).polygonsData(inView);
+    globeInstance.heatmapsData([]).htmlElementsData([]).polygonsData(inView);
     globeLayerMode = 'polygons';
     if (hud) hud.textContent = inView.length.toLocaleString() + ' of ' + total +
       ' scenes' + (inView.length < globeFeats.length
         ? ' in view · ' + globeFeats.length.toLocaleString() + ' selected' : '');
   }} else {{
-    if (globeLayerMode !== 'heatmap') {{
-      globeInstance.polygonsData([]).heatmapsData([{{points: globeHeatPts}}]);
+    heatDim = heatDimFor(pov.altitude);
+    // Re-setting the data is what makes globe.gl re-run the colour function
+    const dimChanged = Math.abs(heatDim - heatDimApplied) > 0.04;
+    if (globeLayerMode !== 'heatmap' || dimChanged) {{
+      globeInstance.polygonsData([]).heatmapsData([]).heatmapsData([{{points: globeHeatPts}}]);
+      heatDimApplied = heatDim;
       globeLayerMode = 'heatmap';
     }}
+    // Count bubbles on top of the field: the heatmap shows where, these say
+    // how many. Re-clustered on every camera move so spacing stays even.
+    const clusters = clusterCells(visibleAngle(pov.altitude) * 0.24, pov);
+    const peak = clusters.reduce((m, c) => Math.max(m, c.n), 1);
+    clusters.forEach(c => {{ c.peak = peak; c.alt = pov.altitude; }});
+    globeInstance.htmlElementsData(clusters);
     if (hud) hud.textContent = globeFeats.length.toLocaleString() + ' of ' + total +
-      ' scenes · heatmap — zoom in for footprints';
+      ' scenes · ' + clusters.length + ' groups — zoom in for footprints';
   }}
 }}
 
@@ -3523,6 +3633,7 @@ function updateGlobe() {{
   if (overlay) overlay.style.display = 'none';   // no longer a capped view
   globeFeats = visibleFeats.filter(globeSafe);
   globeHeatPts = globeFeats.map(f => {{ const c = featCentroid(f); return [c[1], c[0]]; }});
+  buildGlobeCells();
   globeLayerMode = '';                            // force the layer to rebuild
   refreshGlobeLayers();
 }}
@@ -3553,14 +3664,40 @@ function _startGlobe() {{
       .heatmapPointLat(d => d[1])
       .heatmapPointLng(d => d[0])
       .heatmapPointWeight(1)
-      // Bandwidth is in degrees. Below ~2 the density never rises enough to be
-      // visible at all — 0.8 built the layer but drew nothing.
-      .heatmapBandwidth(2.2)
-      .heatmapColorSaturation(1.8)
+      // Bandwidth is in degrees and doubles as the smoothing radius — the
+      // layer has no resolution setting, so a wider kernel is what removes the
+      // blocky look. Below ~2 the density never rises enough to be visible at all.
+      .heatmapBandwidth(3.4)
+      // Accessor, not the ramp itself: globe.gl calls it with the heatmap datum
+      // and expects a colour *function* back (same shape as heatmapPoints).
+      .heatmapColorFn(() => heatColor)
+      .heatmapColorSaturation(1.2)   // pushes more of the field up into the ramp
       // Painted flat on the globe — equal base and top means no 3D relief
       .heatmapBaseAltitude(0.0008)
       .heatmapTopAltitude(0.0008)
       .heatmapsTransitionDuration(0)
+      .htmlLat(d => d.lat)
+      .htmlLng(d => d.lng)
+      .htmlAltitude(0.02)
+      .htmlTransitionDuration(0)
+      .htmlElementVisibilityModifier((el, isVisible) => {{
+        el.style.opacity = isVisible ? 1 : 0;              // hide the far side
+        el.style.pointerEvents = isVisible ? 'auto' : 'none';
+      }})
+      .htmlElement(d => {{
+        const el = document.createElement('div');
+        el.className = 'globe-bub';
+        el.textContent = d.n >= 1000 ? (d.n / 1000).toFixed(1) + 'k' : d.n;
+        const size = Math.round(24 + Math.pow(d.n / d.peak, 0.42) * 34);
+        el.style.width = el.style.height = size + 'px';
+        el.style.fontSize = Math.max(9, Math.min(13, size * 0.32)) + 'px';
+        el.title = d.n.toLocaleString() + ' scenes — click to zoom in';
+        el.addEventListener('click', () => {{
+          globeInstance.pointOfView(
+            {{lat: d.lat, lng: d.lng, altitude: Math.max(0.05, d.alt * 0.42)}}, 800);
+        }});
+        return el;
+      }})
       .polygonLabel(f => {{
         const p = f.properties;
         const date = p.acquisitionDate ? p.acquisitionDate.slice(0,10) : '—';
