@@ -870,6 +870,7 @@ let currentBm = 'dark';
 // dead zone, and the ReferenceError took the rest of the script with it.
 let globeMode = false;
 let globeInstance = null;
+let pendingGlobePov = null;   // view restored from the URL, applied once the globe exists
 
 // The globe can draw the same slippy tiles as the flat map, which is far
 // sharper than a single 2048x1024 texture for the whole planet.
@@ -2575,6 +2576,53 @@ async function checkUsgsStatus() {
 checkUsgsStatus();
 setInterval(checkUsgsStatus, 60_000);
 
+// ── Shareable view in the URL ─────────────────────────────────────────────────
+// Keeps position in the address bar so a view can be linked. replaceState, not
+// pushState — panning shouldn't fill up the back button. Other params
+// (from/to/mmdd) are preserved.
+let urlT;
+function syncUrl() {
+  clearTimeout(urlT);
+  urlT = setTimeout(() => {
+    const p = new URLSearchParams(window.location.search);
+    ['lat', 'lon', 'z', 'alt', 'globe'].forEach(k => p.delete(k));
+    if (globeMode) {
+      p.set('globe', '1');
+      const pov = globeInstance && globeInstance.pointOfView();
+      if (pov) {
+        p.set('lat', pov.lat.toFixed(4));
+        p.set('lon', pov.lng.toFixed(4));
+        p.set('alt', pov.altitude.toFixed(3));
+      }
+    } else {
+      const c = map.getCenter();
+      p.set('lat', c.lat.toFixed(4));
+      p.set('lon', (((c.lng + 180) % 360 + 360) % 360 - 180).toFixed(4));  // unwrap
+      p.set('z', String(map.getZoom()));
+    }
+    const qs = p.toString();
+    history.replaceState(null, '', qs ? '?' + qs : window.location.pathname);
+  }, 400);
+}
+map.on('moveend', syncUrl);
+
+// Defined here but called at the very end of the script: restoring a globe view
+// clicks #globe-btn, whose listener is registered further down.
+function restoreView() {
+  const p = new URLSearchParams(window.location.search);
+  const lat = parseFloat(p.get('lat')), lon = parseFloat(p.get('lon'));
+  const hasPos = isFinite(lat) && isFinite(lon);
+  if (p.get('globe') === '1') {
+    const alt = parseFloat(p.get('alt'));
+    pendingGlobePov = hasPos
+      ? {lat: lat, lng: lon, altitude: isFinite(alt) ? alt : 2.5} : null;
+    document.getElementById('globe-btn').click();
+  } else if (hasPos) {
+    const z = parseInt(p.get('z'), 10);
+    map.setView([lat, lon], isFinite(z) ? z : map.getZoom());
+  }
+}
+
 // ── URL param date filter ──────────────────────────────────────────────────────
 (function() {
   const params = new URLSearchParams(window.location.search);
@@ -2743,8 +2791,10 @@ function _startGlobe() {
       .polygonSideColor(() => 'rgba(0,0,0,0)')
       .polygonStrokeColor(f => f.properties.scanned === false
         ? '#ffa726' : (DS_COLORS[f.properties.dataset] || '#fff'))
-      // lifted off the surface so footprints don't z-fight with the globe
-      .polygonAltitude(0.008)
+      // Flush to the surface. Any real altitude makes footprints parallax
+      // against the ground as you orbit, so they look mis-placed; this is just
+      // enough to stay off the sphere without being visibly raised.
+      .polygonAltitude(0.0004)
       // heatmapPoints defaults to identity, so the points array has to be
       // pulled out explicitly — without this globe.gl throws internally and
       // renders nothing while still reporting a heatmap layer.
@@ -2756,8 +2806,9 @@ function _startGlobe() {
       // visible at all — 0.8 built the layer but drew nothing.
       .heatmapBandwidth(2.2)
       .heatmapColorSaturation(1.8)
-      .heatmapBaseAltitude(0.005)
-      .heatmapTopAltitude(0.12)
+      // Painted flat on the globe — equal base and top means no 3D relief
+      .heatmapBaseAltitude(0.0008)
+      .heatmapTopAltitude(0.0008)
       .heatmapsTransitionDuration(0)
       .polygonLabel(f => {
         const p = f.properties;
@@ -2773,8 +2824,12 @@ function _startGlobe() {
     let zt;
     globeInstance.onZoom(() => {
       clearTimeout(zt);
-      zt = setTimeout(refreshGlobeLayers, 180);
+      zt = setTimeout(() => { refreshGlobeLayers(); syncUrl(); }, 180);
     });
+    if (pendingGlobePov) {
+      globeInstance.pointOfView(pendingGlobePov, 0);
+      pendingGlobePov = null;
+    }
     globeInstance.width(el.clientWidth).height(el.clientHeight);
     new ResizeObserver(() => {
       globeInstance.width(el.clientWidth).height(el.clientHeight);
@@ -2792,6 +2847,7 @@ document.getElementById('globe-btn').addEventListener('click', () => {
   btn.classList.toggle('on', globeMode);
   btn.title = globeMode ? 'Switch to flat map' : 'Switch to globe view';
 
+  syncUrl();
   if (!globeMode) {
     // Leaflet mis-measures while hidden — re-measure now the map is back
     setTimeout(() => map.invalidateSize(), 0);
@@ -2817,6 +2873,9 @@ document.getElementById('globe-btn').addEventListener('click', () => {
     _startGlobe();
   }
 });
+
+// Last: every listener it may need is now registered
+restoreView();
 </script>
 </body>
 </html>
