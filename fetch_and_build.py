@@ -3923,7 +3923,19 @@ def main():
                 print(f"  {len(unscanned):,} unscanned features added "
                       f"(from {len(every):,} total in {dataset})")
             except Exception as e:
+                # Fall back to the previous run's unscanned frames, the same way
+                # the scanned loop does. Without this a timed-out fetch silently
+                # dropped tens of thousands of features and still published.
                 print(f"  WARNING: unscanned {dataset} fetch failed — {e}")
+                keep = [f for f in prev_by_dataset.get(dataset, [])
+                        if f["properties"].get("scanned") is False
+                        and f["properties"]["entityId"] not in scanned_ids]
+                if keep:
+                    all_features.extend(keep)
+                    print(f"  Reused {len(keep):,} unscanned {dataset} features from previous run")
+                else:
+                    print(f"  No previous unscanned data for {dataset}")
+                failed.append(dataset + " (unscanned)")
 
         # KH-6 (LANYARD) unscanned frames, pulled with a server-side mission
         # filter. Redundant once corona2 is in full_pull, but until then it's the
@@ -3950,12 +3962,35 @@ def main():
                           f"(from {len(lanyard):,} LANYARD scenes returned)")
             except Exception as e:
                 print(f"  WARNING: unscanned KH-6 fetch failed — {e}")
+                keep = [f for f in prev_by_dataset.get("corona2", [])
+                        if f["properties"].get("scanned") is False
+                        and f["properties"].get("satellite") == "KH-6 (LANYARD)"]
+                if keep:
+                    all_features.extend(keep)
+                    print(f"  Reused {len(keep):,} unscanned KH-6 features from previous run")
 
     finally:
         logout(api_key)
 
     if not all_features:
         raise RuntimeError("All datasets failed and no previous data available — nothing to build")
+
+    # Last line of defence before publishing. A run that loses a large chunk of
+    # the archive still looks like a success — it produces a valid, smaller
+    # file — and would overwrite good data in R2. This actually happened: three
+    # timed-out unscanned fetches published 66,403 features over 108,067.
+    prev_total = sum(len(v) for v in prev_by_dataset.values())
+    if prev_total:
+        kept = len(all_features) / prev_total
+        if kept < 0.9 and not os.environ.get("ALLOW_SHRINK"):
+            raise RuntimeError(
+                f"Refusing to publish: {len(all_features):,} features is only "
+                f"{kept:.0%} of the previous run's {prev_total:,}. Something was "
+                f"lost rather than genuinely removed. Set ALLOW_SHRINK=1 to override."
+            )
+        if kept < 1.0:
+            print(f"  Note: {len(all_features):,} features vs {prev_total:,} previously "
+                  f"({kept:.1%})")
 
     if failed:
         print(f"\nWARNING: {len(failed)} dataset(s) used fallback data: {', '.join(failed)}")
