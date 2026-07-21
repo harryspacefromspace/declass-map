@@ -3476,17 +3476,32 @@ function refreshGlobeLayers() {{
 }}
 
 // three-globe treats a ring's winding as choosing which side of the sphere is
-// "inside". GeoJSON exterior rings are counter-clockwise, which it fills as the
-// COMPLEMENT — a 2° footprint swallowed the whole globe. Reverse them (cached
-// per feature; the flat map is unaffected and keeps the original geometry).
+// "inside", and wants exterior rings clockwise — feed it a counter-clockwise
+// one and it fills the COMPLEMENT, so a 2° footprint swallows the globe.
+//
+// The archive is not consistently wound: ~342 of 108k rings are already
+// clockwise. Blanket-reversing therefore inverted exactly those, which drew as
+// giant overlapping shapes across the oceans. So normalise instead of reverse:
+// exterior ring clockwise, holes counter-clockwise. Cached per feature; the
+// flat map is unaffected and keeps the original geometry.
+function ringIsCW(r) {{
+  let s = 0;
+  for (let i = 0; i < r.length - 1; i++) s += (r[i+1][0] - r[i][0]) * (r[i+1][1] + r[i][1]);
+  return s > 0;
+}}
+function normRings(rings) {{
+  return rings.map((r, i) => {{
+    const wantCW = (i === 0);          // exterior CW, holes CCW
+    return ringIsCW(r) === wantCW ? r : r.slice().reverse();
+  }});
+}}
 function globeGeom(f) {{
   if (f._gg) return f._gg;
   const g = f.geometry || {{}};
-  const rev = r => r.slice().reverse();
   const out = g.type === 'Polygon'
-    ? {{type: 'Polygon', coordinates: g.coordinates.map(rev)}}
+    ? {{type: 'Polygon', coordinates: normRings(g.coordinates)}}
     : g.type === 'MultiPolygon'
-      ? {{type: 'MultiPolygon', coordinates: g.coordinates.map(p => p.map(rev))}}
+      ? {{type: 'MultiPolygon', coordinates: g.coordinates.map(normRings)}}
       : g;
   return (f._gg = out);
 }}
