@@ -3334,7 +3334,81 @@ setInterval(checkUsgsStatus, 60_000);
 }})();
 
 // ── Globe view ────────────────────────────────────────────────────────────────
-const MAX_GLOBE_FEATS = 3000;
+// Footprint polygons are one 3D mesh each, so they're draw-call bound: ~10fps at
+// 3,000 and unusable beyond. The heatmap is a single batched layer and holds
+// 60fps with the whole archive. So: heatmap while the view is crowded, real
+// footprints once few enough are actually on screen.
+const GLOBE_POLY_CAP = 1200;
+let globeFeats = [];      // current selection, minus date-line crossers
+let globeHeatPts = [];    // [lng, lat] per feature, rebuilt only on filter change
+let globeLayerMode = '';
+
+function featCentroid(f) {{
+  if (f._cc !== undefined) return f._cc;
+  const bb = featBBox(f);
+  return (f._cc = bb ? [(bb[1] + bb[3]) / 2, (bb[0] + bb[2]) / 2] : null);  // [lat, lng]
+}}
+
+// Angular radius of what's actually on screen. Two limits apply: the horizon
+// (acos(1/d)) and the camera's field of view. Zoomed in the FOV dominates by a
+// long way — at altitude 0.08 the horizon is 22 deg but the FOV shows ~2 deg,
+// so using the horizon alone kept the view "crowded" no matter how far you zoomed.
+function visibleAngle(altitude) {{
+  const d = 1 + Math.max(altitude, 0.001);
+  const horizon = Math.acos(Math.min(1, 1 / d));
+  let fov = 50;
+  try {{ fov = globeInstance.camera().fov || 50; }} catch (e) {{}}
+  const a = (fov / 2) * Math.PI / 180;
+  const s = d * Math.sin(a);
+  if (s >= 1) return horizon;                       // FOV overshoots the globe
+  const theta = Math.PI - a - (Math.PI - Math.asin(s));
+  return Math.max(0, Math.min(theta, horizon));
+}}
+
+function featsInView(pov) {{
+  const cosH = Math.cos(visibleAngle(pov.altitude));
+  const la1 = pov.lat * Math.PI / 180, lo1 = pov.lng * Math.PI / 180;
+  const s1 = Math.sin(la1), c1 = Math.cos(la1);
+  const out = [];
+  for (const f of globeFeats) {{
+    const c = featCentroid(f);
+    if (!c) continue;
+    const la2 = c[0] * Math.PI / 180, lo2 = c[1] * Math.PI / 180;
+    if (s1 * Math.sin(la2) + c1 * Math.cos(la2) * Math.cos(lo2 - lo1) >= cosH) out.push(f);
+  }}
+  return out;
+}}
+
+function refreshGlobeLayers() {{
+  if (!globeInstance || !globeMode) return;
+  const hud = document.getElementById('globe-count');
+  const total = GEOJSON.features.length.toLocaleString();
+
+  if (!globeFeats.length) {{
+    if (globeLayerMode !== 'empty') {{
+      globeInstance.polygonsData([]).heatmapsData([]);
+      globeLayerMode = 'empty';
+    }}
+    if (hud) hud.textContent = '0 of ' + total + ' scenes';
+    return;
+  }}
+
+  const inView = featsInView(globeInstance.pointOfView());
+  if (inView.length <= GLOBE_POLY_CAP) {{
+    globeInstance.heatmapsData([]).polygonsData(inView);
+    globeLayerMode = 'polygons';
+    if (hud) hud.textContent = inView.length.toLocaleString() + ' of ' + total +
+      ' scenes' + (inView.length < globeFeats.length
+        ? ' in view · ' + globeFeats.length.toLocaleString() + ' selected' : '');
+  }} else {{
+    if (globeLayerMode !== 'heatmap') {{
+      globeInstance.polygonsData([]).heatmapsData([{{points: globeHeatPts}}]);
+      globeLayerMode = 'heatmap';
+    }}
+    if (hud) hud.textContent = globeFeats.length.toLocaleString() + ' of ' + total +
+      ' scenes · heatmap — zoom in for footprints';
+  }}
+}}
 
 // three-globe treats a ring's winding as choosing which side of the sphere is
 // "inside". GeoJSON exterior rings are counter-clockwise, which it fills as the
@@ -3361,32 +3435,16 @@ function globeSafe(f) {{
   return (f._gsafe = !!bb && (bb[2] - bb[0]) <= 180);
 }}
 
+// Called whenever the selection changes; camera moves go straight to
+// refreshGlobeLayers() since the underlying set hasn't changed.
 function updateGlobe() {{
   if (!globeInstance || !globeMode) return;
-  const tooMany = visibleFeats.length > MAX_GLOBE_FEATS;
   const overlay = document.getElementById('globe-too-many');
-  const hud     = document.getElementById('globe-count');
-  // Defensive: never let a missing overlay break buildLayers()
-  if (overlay) overlay.style.display = tooMany ? 'flex' : 'none';
-
-  let drawn = [];
-  if (!tooMany) drawn = visibleFeats.filter(globeSafe);
-  const skipped = tooMany ? 0 : visibleFeats.length - drawn.length;
-
-  if (hud) {{
-    hud.textContent = tooMany
-      ? visibleFeats.length.toLocaleString() + ' scenes — too many to draw'
-      : drawn.length.toLocaleString() + ' of ' +
-        GEOJSON.features.length.toLocaleString() + ' scenes' +
-        (skipped ? ' · ' + skipped + ' cross the date line' : '');
-  }}
-  if (tooMany) {{
-    const c = document.getElementById('globe-too-many-count');
-    if (c) c.textContent = visibleFeats.length.toLocaleString() + ' scenes selected';
-    globeInstance.polygonsData([]);
-  }} else {{
-    globeInstance.polygonsData(drawn);
-  }}
+  if (overlay) overlay.style.display = 'none';   // no longer a capped view
+  globeFeats = visibleFeats.filter(globeSafe);
+  globeHeatPts = globeFeats.map(f => {{ const c = featCentroid(f); return [c[1], c[0]]; }});
+  globeLayerMode = '';                            // force the layer to rebuild
+  refreshGlobeLayers();
 }}
 
 function _startGlobe() {{
@@ -3406,6 +3464,20 @@ function _startGlobe() {{
         ? '#ffa726' : (DS_COLORS[f.properties.dataset] || '#fff'))
       // lifted off the surface so footprints don't z-fight with the globe
       .polygonAltitude(0.008)
+      // heatmapPoints defaults to identity, so the points array has to be
+      // pulled out explicitly — without this globe.gl throws internally and
+      // renders nothing while still reporting a heatmap layer.
+      .heatmapPoints(d => d.points)
+      .heatmapPointLat(d => d[1])
+      .heatmapPointLng(d => d[0])
+      .heatmapPointWeight(1)
+      // Bandwidth is in degrees. Below ~2 the density never rises enough to be
+      // visible at all — 0.8 built the layer but drew nothing.
+      .heatmapBandwidth(2.2)
+      .heatmapColorSaturation(1.8)
+      .heatmapBaseAltitude(0.005)
+      .heatmapTopAltitude(0.12)
+      .heatmapsTransitionDuration(0)
       .polygonLabel(f => {{
         const p = f.properties;
         const date = p.acquisitionDate ? p.acquisitionDate.slice(0,10) : '—';
@@ -3415,6 +3487,13 @@ function _startGlobe() {{
       }})
       (el);
     applyGlobeBasemap();
+    // Swap between heatmap and footprints as the camera moves. Debounced so a
+    // drag doesn't rebuild the layer on every frame.
+    let zt;
+    globeInstance.onZoom(() => {{
+      clearTimeout(zt);
+      zt = setTimeout(refreshGlobeLayers, 180);
+    }});
     globeInstance.width(el.clientWidth).height(el.clientHeight);
     new ResizeObserver(() => {{
       globeInstance.width(el.clientWidth).height(el.clientHeight);
