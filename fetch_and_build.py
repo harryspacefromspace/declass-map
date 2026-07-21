@@ -1283,11 +1283,15 @@ body{{
    off-screen with no way to reach them. Wrap rather than scroll, because
    .dd-panel dropdowns are absolutely positioned inside #filters and an
    overflow-x:auto here would clip them vertically. */
-@media (max-width:900px){{
+/* 1280px, not 900: the toolbar has grown (Cart, List, Frame order) and needs
+   ~1270px on one row, so anything narrower was clipping controls unreachably */
+@media (max-width:1280px){{
   #header{{padding:8px 12px;gap:10px}}
   #filters{{flex-wrap:wrap;padding:8px 12px}}
   #reset-btn{{margin-left:0}}
-  #view-group{{margin-left:0}}
+  /* wrap too — it's a nested flex row, so wrapping #filters alone left it
+     overflowing (425px of buttons in a 390px viewport) */
+  #view-group{{margin-left:0;flex-wrap:wrap}}
   #search-wrap{{margin-left:0;width:100%}}
   #search{{width:100%}}
 }}
@@ -1579,6 +1583,27 @@ const BASEMAPS = {{
                {{attribution:'© OpenStreetMap contributors', maxZoom:19}})
 }};
 let activeBmLayers = [];
+let currentBm = 'dark';
+// Declared up here on purpose: setBasemap() runs at load and reaches these via
+// applyGlobeBasemap(). Declaring them further down put them in the temporal
+// dead zone, and the ReferenceError took the rest of the script with it.
+let globeMode = false;
+let globeInstance = null;
+
+// The globe can draw the same slippy tiles as the flat map, which is far
+// sharper than a single 2048x1024 texture for the whole planet.
+const GLOBE_TILES = {{
+  dark:      (x, y, l) => `https://${{'abcd'[Math.abs(x + y) % 4]}}.basemaps.cartocdn.com/dark_all/${{l}}/${{x}}/${{y}}.png`,
+  satellite: (x, y, l) => `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${{l}}/${{y}}/${{x}}`,
+  hybrid:    (x, y, l) => `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${{l}}/${{y}}/${{x}}`,
+  osm:       (x, y, l) => `https://${{'abc'[Math.abs(x + y) % 3]}}.tile.openstreetmap.org/${{l}}/${{x}}/${{y}}.png`
+}};
+function applyGlobeBasemap() {{
+  if (!globeInstance) return;
+  const fn = GLOBE_TILES[currentBm] || GLOBE_TILES.dark;
+  globeInstance.globeImageUrl(null).globeTileEngineUrl(fn);
+}}
+
 function setBasemap(key) {{
   const bm = BASEMAPS[key];
   if (!bm) return;              // ignore .bm-btn styled buttons that aren't basemaps
@@ -1592,6 +1617,8 @@ function setBasemap(key) {{
   // Only real basemap buttons own the 'on' state here — #globe-btn and
   // #sb-toggle share the .bm-btn look but manage their own toggle state.
   document.querySelectorAll('.bm-btn[data-bm]').forEach(b => b.classList.toggle('on', b.dataset.bm===key));
+  currentBm = key;
+  applyGlobeBasemap();   // keep the globe on the same basemap
 }}
 setBasemap('dark');
 // Ensure Leaflet knows the correct map size after initial render
@@ -1635,8 +1662,7 @@ let recentDays = 0;   // 0 = off; else filter to scenes that became downloadable
 // Frame-order window, as a percentage of each mission's flight sequence
 let frameLo = 0, frameHi = 100;
 let dateFilter = null;
-let globeMode = false;
-let globeInstance = null;
+// (globeMode / globeInstance are declared above, near setBasemap)
 
 // ── Layers ────────────────────────────────────────────────────────────────────
 const layers = {{}};
@@ -3367,8 +3393,7 @@ function _startGlobe() {{
   const el = document.getElementById('globe-container');
   if (!globeInstance) {{
     globeInstance = Globe()
-      .globeImageUrl('//unpkg.com/three-globe/example/img/earth-dark.jpg')
-      .backgroundImageUrl('//unpkg.com/three-globe/example/img/night-sky.png')
+      .backgroundImageUrl('https://unpkg.com/three-globe/example/img/night-sky.png')
       .atmosphereColor('rgba(100,150,255,0.25)')
       .atmosphereAltitude(0.1)
       .polygonGeoJsonGeometry(globeGeom)
@@ -3389,6 +3414,7 @@ function _startGlobe() {{
         </div>`;
       }})
       (el);
+    applyGlobeBasemap();
     globeInstance.width(el.clientWidth).height(el.clientHeight);
     new ResizeObserver(() => {{
       globeInstance.width(el.clientWidth).height(el.clientHeight);
