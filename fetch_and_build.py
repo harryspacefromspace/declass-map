@@ -3898,48 +3898,56 @@ def main():
                     print(f"  No previous data for {dataset} — skipping")
                 failed.append(dataset)
 
-        # Fetch unscanned KH-7 (declassii) scenes — all scenes minus already-scanned
-        print(f"\n  Declass II — unscanned KH-7 scenes...")
-        try:
-            scanned_ids = {f["properties"]["entityId"]
-                           for f in all_features
-                           if f["properties"]["dataset"] == "declassii"}
-            all_declassii = search_all(api_key, "declassii", deadline)
-            unscanned = []
-            for scene in all_declassii:
-                f = scene_to_feature_unscanned(scene, "declassii", scanned_ids)
-                if f:
-                    unscanned.append(f)
-            all_features.extend(unscanned)
-            print(f"  {len(unscanned):,} unscanned KH-7 features added")
-        except Exception as e:
-            print(f"  WARNING: unscanned KH-7 fetch failed — {e}")
+        # Datasets pulled in full (scanned + unscanned). Pulling all three takes
+        # the file from ~58 MB to a projected ~280 MB, well past GitHub's 100 MB
+        # per-file limit, so this stays on declassii until the scene data is
+        # served from object storage. Then: FULL_PULL_DATASETS=corona2,declassii,declassiii
+        full_pull = [d for d in os.environ.get("FULL_PULL_DATASETS", "declassii").split(",")
+                     if d.strip() in DATASETS]
+        print(f"\n  Full pull enabled for: {', '.join(full_pull) or '(none)'}")
+        for dataset in full_pull:
+            print(f"\n  {DATASET_LABELS[dataset]} — unscanned frames...")
+            try:
+                scanned_ids = {f["properties"]["entityId"]
+                               for f in all_features
+                               if f["properties"]["dataset"] == dataset}
+                every = search_all(api_key, dataset, deadline)
+                unscanned = []
+                for scene in every:
+                    f = scene_to_feature_unscanned(scene, dataset, scanned_ids)
+                    if f:
+                        unscanned.append(f)
+                all_features.extend(unscanned)
+                print(f"  {len(unscanned):,} unscanned features added "
+                      f"(from {len(every):,} total in {dataset})")
+            except Exception as e:
+                print(f"  WARNING: unscanned {dataset} fetch failed — {e}")
 
-        # Fetch unscanned KH-6 (LANYARD) frames. Unlike declassii (all KH-7/9),
-        # corona2 is huge and mostly other satellites, so filter to the three
-        # LANYARD missions server-side instead of pulling the whole dataset.
-        print(f"\n  Declass I — unscanned KH-6 (LANYARD) frames...")
-        try:
-            mission_fid = get_metadata_filter_id(api_key, "corona2", ["mission"], deadline)
-            if not mission_fid:
-                print("  Could not find a Mission filter for corona2 — skipping KH-6")
-            else:
-                kh6_scanned = {f["properties"]["entityId"] for f in all_features
-                               if f["properties"]["dataset"] == "corona2"
-                               and f["properties"].get("satellite") == "KH-6 (LANYARD)"}
-                lanyard = search_by_missions(api_key, "corona2", mission_fid,
-                                             LANYARD_MISSIONS, deadline)
-                added = 0
-                for scene in lanyard:
-                    f = scene_to_feature_unscanned(scene, "corona2", kh6_scanned)
-                    # Guard against the mission filter returning anything unexpected
-                    if f and f["properties"].get("satellite") == "KH-6 (LANYARD)":
-                        all_features.append(f)
-                        added += 1
-                print(f"  {added:,} unscanned KH-6 features added "
-                      f"(from {len(lanyard):,} LANYARD scenes returned)")
-        except Exception as e:
-            print(f"  WARNING: unscanned KH-6 fetch failed — {e}")
+        # KH-6 (LANYARD) unscanned frames, pulled with a server-side mission
+        # filter. Redundant once corona2 is in full_pull, but until then it's the
+        # only way those 888 frames get on the map without hauling all of corona2.
+        if "corona2" not in full_pull:
+            print(f"\n  Declass I — unscanned KH-6 (LANYARD) frames...")
+            try:
+                mission_fid = get_metadata_filter_id(api_key, "corona2", ["mission"], deadline)
+                if not mission_fid:
+                    print("  Could not find a Mission filter for corona2 — skipping KH-6")
+                else:
+                    kh6_scanned = {f["properties"]["entityId"] for f in all_features
+                                   if f["properties"]["dataset"] == "corona2"
+                                   and f["properties"].get("satellite") == "KH-6 (LANYARD)"}
+                    lanyard = search_by_missions(api_key, "corona2", mission_fid,
+                                                 LANYARD_MISSIONS, deadline)
+                    added = 0
+                    for scene in lanyard:
+                        f = scene_to_feature_unscanned(scene, "corona2", kh6_scanned)
+                        if f and f["properties"].get("satellite") == "KH-6 (LANYARD)":
+                            all_features.append(f)
+                            added += 1
+                    print(f"  {added:,} unscanned KH-6 features added "
+                          f"(from {len(lanyard):,} LANYARD scenes returned)")
+            except Exception as e:
+                print(f"  WARNING: unscanned KH-6 fetch failed — {e}")
 
     finally:
         logout(api_key)
@@ -4011,10 +4019,19 @@ def main():
     # even on a partial run. Minified to keep the served file small.
     with open("available_scenes.geojson", "w") as f:
         json.dump(geojson, f, separators=(",", ":"))
+    size = os.path.getsize("available_scenes.geojson")
     if failed:
         print(f"Saved available_scenes.geojson (partial run — {', '.join(failed)} used fallback data)")
     else:
         print("Saved available_scenes.geojson (full run)")
+    print(f"  {size/1e6:.1f} MB")
+    # GitHub rejects any file over 100 MB outright, which would fail the push
+    # and leave the map stale. Shout well before that.
+    if size > 95_000_000:
+        print("  !! OVER GITHUB'S 100 MB FILE LIMIT — this push will be REJECTED.")
+        print("     Move the scene data to object storage (R2) before the next run.")
+    elif size > 70_000_000:
+        print(f"  !  {100 - size/1e6:.0f} MB of headroom left under GitHub's 100 MB limit.")
 
     print(f"\nDone — {len(all_features):,} scenes mapped.")
 
