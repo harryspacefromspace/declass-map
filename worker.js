@@ -58,8 +58,14 @@ export default {
     headers.set('cache-control', 'public, max-age=1800, stale-while-revalidate=86400');
 
     // Honour conditional requests so a repeat visit costs a 304, not 55MB.
-    if (request.headers.get('if-none-match') === obj.httpEtag) {
-      return new Response(null, { status: 304, headers });
+    // Compare loosely: when Cloudflare compresses a response it hands the
+    // client a WEAK etag (W/"..."), which the browser echoes back — a strict
+    // comparison against our strong etag would miss and re-send the lot.
+    const inm = request.headers.get('if-none-match');
+    if (inm) {
+      const ours = obj.httpEtag.replace(/^W\//, '');
+      const matched = inm.split(',').some(t => t.trim().replace(/^W\//, '') === ours);
+      if (matched) return new Response(null, { status: 304, headers });
     }
 
     return new Response(request.method === 'HEAD' ? null : obj.body, { headers });
