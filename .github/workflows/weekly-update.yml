@@ -9,6 +9,10 @@ on:
         description: "Datasets to pull in full, scanned + unscanned (comma separated)"
         default: "declassii"
         type: string
+      pull_satellites:
+        description: "Satellites to pull whole, e.g. KH-1,KH-2,KH-3,KH-4 (bounded chunks)"
+        default: ""
+        type: string
       fetch_budget:
         description: "Seconds allowed for all USGS fetching before falling back"
         default: "2400"
@@ -93,6 +97,7 @@ jobs:
           # On a schedule `inputs` is empty, so these fall back to the defaults
           FULL_PULL_DATASETS: ${{ inputs.full_pull || 'declassii' }}
           FETCH_BUDGET_SECONDS: ${{ inputs.fetch_budget || '2400' }}
+          PULL_SATELLITES: ${{ inputs.pull_satellites || '' }}
 
       # Scene data goes to R2, not the repo. Committing a ~55MB file daily grew
       # .git past 590MB, and GitHub rejects anything over 100MB outright — which

@@ -44,6 +44,21 @@ DATASET_IDS = {
 # Used to pull unscanned LANYARD frames out of the large corona2 dataset.
 LANYARD_MISSIONS = ["8001", "8002", "8003"]
 
+# Mission numbers per satellite, mirroring the ranges in get_satellite_type().
+# A whole dataset is too big to pull inside one run with full metadata, but a
+# single satellite is a bounded, meaningful chunk — and one that maps onto a
+# server-side mission filter, so USGS does the narrowing rather than us.
+# Ranges are enumerated in full; missions that never flew simply return nothing.
+SATELLITE_MISSIONS = {
+    "KH-1":           ("corona2", ["9009"]),
+    "KH-2":           ("corona2", ["9013", "9017", "9019"]),
+    "KH-3":           ("corona2", ["9022", "9023", "9025", "9028", "9029"]),
+    "KH-4":           ("corona2", [str(n) for n in range(9031, 9063)]),
+    "KH-4A":          ("corona2", [str(n) for n in range(1001, 1053)]),
+    "KH-4B":          ("corona2", [str(n) for n in range(1101, 1118)]),
+    "KH-6 (LANYARD)": ("corona2", LANYARD_MISSIONS),
+}
+
 # Satellite display order
 SAT_ORDER = [
     "KH-1", "KH-2", "KH-3", "KH-4", "KH-4A", "KH-4B",
@@ -3924,10 +3939,57 @@ def main():
                     print(f"  No previous unscanned data for {dataset}")
                 failed.append(dataset + " (unscanned)")
 
+        # Per-satellite pulls. A whole dataset doesn't fit in one run with full
+        # metadata, but a single satellite does, and it's a unit that means
+        # something: "KH-1 to KH-4 complete" is a state you can reason about,
+        # unlike a pagination offset. Each satellite's frames are pulled whole
+        # (scanned and unscanned) via its mission numbers.
+        pull_sats = [s.strip() for s in os.environ.get("PULL_SATELLITES", "").split(",")
+                     if s.strip()]
+        unknown = [s for s in pull_sats if s not in SATELLITE_MISSIONS]
+        if unknown:
+            print(f"\n  WARNING: unknown satellite(s) {unknown} — known: {sorted(SATELLITE_MISSIONS)}")
+            pull_sats = [s for s in pull_sats if s in SATELLITE_MISSIONS]
+        if pull_sats:
+            print(f"\n  Per-satellite pull: {', '.join(pull_sats)}")
+            sat_fid = None
+            try:
+                sat_fid = get_metadata_filter_id(api_key, "corona2", ["mission"], deadline)
+            except Exception as e:
+                print(f"  WARNING: could not look up the Mission filter — {e}")
+            if not sat_fid:
+                print("  Skipping per-satellite pull (no Mission filter)")
+            for sat in (pull_sats if sat_fid else []):
+                ds, missions = SATELLITE_MISSIONS[sat]
+                print(f"\n  {sat} — {len(missions)} mission(s) in {ds}...")
+                try:
+                    scanned_ids = {f["properties"]["entityId"]
+                                   for f in all_features
+                                   if f["properties"]["dataset"] == ds}
+                    scenes = search_by_missions(api_key, ds, sat_fid, missions, deadline)
+                    if not scenes:
+                        # Silent zero is the dangerous failure here: it looks the
+                        # same as "this satellite has no frames".
+                        print(f"  WARNING: {sat} returned NO scenes — check the mission "
+                              f"numbers match USGS's Mission Number field")
+                        continue
+                    added = 0
+                    for scene in scenes:
+                        f = scene_to_feature_unscanned(scene, ds, scanned_ids)
+                        if f and f["properties"].get("satellite") == sat:
+                            all_features.append(f)
+                            added += 1
+                    print(f"  {added:,} unscanned {sat} features added "
+                          f"(from {len(scenes):,} returned; "
+                          f"{len(scenes) - added:,} already scanned or other satellites)")
+                except Exception as e:
+                    print(f"  WARNING: {sat} pull failed — {e}")
+                    failed.append(sat)
+
         # KH-6 (LANYARD) unscanned frames, pulled with a server-side mission
         # filter. Redundant once corona2 is in full_pull, but until then it's the
         # only way those 888 frames get on the map without hauling all of corona2.
-        if "corona2" not in full_pull:
+        if "corona2" not in full_pull and "KH-6 (LANYARD)" not in pull_sats:
             print(f"\n  Declass I — unscanned KH-6 (LANYARD) frames...")
             try:
                 mission_fid = get_metadata_filter_id(api_key, "corona2", ["mission"], deadline)
