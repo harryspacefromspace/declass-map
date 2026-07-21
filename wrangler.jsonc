@@ -1,15 +1,23 @@
 {
   "$schema": "https://raw.githubusercontent.com/cloudflare/workers-sdk/main/packages/wrangler/config-schema.json",
   "name": "declass-map",
+  "main": "worker.js",
   "compatibility_date": "2026-07-01",
 
-  // The repo root holds the build script, scenes.db, monitor.py and so on.
-  // Only ./dist is published, so nothing else is exposed. `npm run build`
-  // copies index.html into it.
-  "pages_build_output_dir": "./dist",
+  "assets": {
+    // Only ./dist is published. The repo root also holds scenes.db, monitor.py
+    // and the raw scene file, none of which should ever be served — build-dist
+    // copies in an allowlist rather than publishing the root.
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "none",
+    // Everything else is served straight from assets without waking the Worker;
+    // only /data/* needs it.
+    "run_worker_first": ["/data/*"]
+  },
 
   // Scene data lives in a private bucket with no public access and no custom
-  // domain — it is readable only through this binding, from our own Function.
+  // domain — readable only through this binding, from our own Worker.
   "r2_buckets": [
     { "binding": "SCENES", "bucket_name": "declass-map-data" }
   ]
