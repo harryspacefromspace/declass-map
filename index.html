@@ -217,7 +217,16 @@ body{
 /* Map */
 #stage{flex:1;display:flex;min-height:0;min-width:0;position:relative}
 #map{flex:1;position:relative;min-width:0}
-#globe-container{flex:1;position:relative;background:#000014;overflow:hidden;display:none;min-width:0}
+#globe-wrap{flex:1;position:relative;background:#000014;overflow:hidden;display:none;min-width:0}
+#globe-wrap.on{display:block}
+#globe-container{position:absolute;inset:0}
+#globe-hud{
+  position:absolute;bottom:20px;left:50%;transform:translateX(-50%);z-index:5;
+  background:rgba(18,18,18,.92);backdrop-filter:blur(8px);
+  border:1px solid #2c2c2c;color:#bbb;padding:7px 18px;border-radius:24px;
+  font-size:13px;pointer-events:none;white-space:nowrap;font-weight:500;
+  box-shadow:0 2px 8px rgba(0,0,0,.5);
+}
 
 /* ── Right sidebar — scenes in view ── */
 #sidebar{
@@ -710,10 +719,14 @@ body{
 
 <div id="stage">
 
-<div id="globe-container">
+<!-- globe.gl takes over #globe-container and replaces its children, so the
+     overlays must live outside it or they get destroyed on mount -->
+<div id="globe-wrap">
+  <div id="globe-container"></div>
+  <div id="globe-hud"><span id="globe-count"></span></div>
   <div id="globe-too-many">
     <strong id="globe-too-many-count"></strong>
-    <p>Too many scenes to render on the globe.<br>Use the filters to reduce to under 3,000 scenes.</p>
+    <p>Too many scenes to draw on the globe.<br>Filter down to under 3,000 to see footprints.</p>
   </div>
 </div>
 
@@ -2578,17 +2591,56 @@ setInterval(checkUsgsStatus, 60_000);
 // ── Globe view ────────────────────────────────────────────────────────────────
 const MAX_GLOBE_FEATS = 3000;
 
+// three-globe treats a ring's winding as choosing which side of the sphere is
+// "inside". GeoJSON exterior rings are counter-clockwise, which it fills as the
+// COMPLEMENT — a 2° footprint swallowed the whole globe. Reverse them (cached
+// per feature; the flat map is unaffected and keeps the original geometry).
+function globeGeom(f) {
+  if (f._gg) return f._gg;
+  const g = f.geometry || {};
+  const rev = r => r.slice().reverse();
+  const out = g.type === 'Polygon'
+    ? {type: 'Polygon', coordinates: g.coordinates.map(rev)}
+    : g.type === 'MultiPolygon'
+      ? {type: 'MultiPolygon', coordinates: g.coordinates.map(p => p.map(rev))}
+      : g;
+  return (f._gg = out);
+}
+
+// A footprint crossing the antimeridian has coordinates jumping +179 -> -179,
+// which draws as a band right around the globe. They can't be rendered without
+// splitting them, so leave them off the globe (~0.3% of scenes).
+function globeSafe(f) {
+  if (f._gsafe !== undefined) return f._gsafe;
+  const bb = featBBox(f);
+  return (f._gsafe = !!bb && (bb[2] - bb[0]) <= 180);
+}
+
 function updateGlobe() {
   if (!globeInstance || !globeMode) return;
   const tooMany = visibleFeats.length > MAX_GLOBE_FEATS;
   const overlay = document.getElementById('globe-too-many');
-  overlay.style.display = tooMany ? 'flex' : 'none';
+  const hud     = document.getElementById('globe-count');
+  // Defensive: never let a missing overlay break buildLayers()
+  if (overlay) overlay.style.display = tooMany ? 'flex' : 'none';
+
+  let drawn = [];
+  if (!tooMany) drawn = visibleFeats.filter(globeSafe);
+  const skipped = tooMany ? 0 : visibleFeats.length - drawn.length;
+
+  if (hud) {
+    hud.textContent = tooMany
+      ? visibleFeats.length.toLocaleString() + ' scenes — too many to draw'
+      : drawn.length.toLocaleString() + ' of ' +
+        GEOJSON.features.length.toLocaleString() + ' scenes' +
+        (skipped ? ' · ' + skipped + ' cross the date line' : '');
+  }
   if (tooMany) {
-    document.getElementById('globe-too-many-count').textContent =
-      visibleFeats.length.toLocaleString() + ' scenes visible';
+    const c = document.getElementById('globe-too-many-count');
+    if (c) c.textContent = visibleFeats.length.toLocaleString() + ' scenes selected';
     globeInstance.polygonsData([]);
   } else {
-    globeInstance.polygonsData(visibleFeats);
+    globeInstance.polygonsData(drawn);
   }
 }
 
@@ -2600,11 +2652,16 @@ function _startGlobe() {
       .backgroundImageUrl('//unpkg.com/three-globe/example/img/night-sky.png')
       .atmosphereColor('rgba(100,150,255,0.25)')
       .atmosphereAltitude(0.1)
-      .polygonGeoJsonGeometry(f => f.geometry)
-      .polygonCapColor(f => (DS_COLORS[f.properties.dataset] || '#fff') + '30')
+      .polygonGeoJsonGeometry(globeGeom)
+      // Unscanned film gets the same dashed-orange treatment as the flat map
+      .polygonCapColor(f => f.properties.scanned === false
+        ? 'rgba(255,167,38,0.18)'
+        : (DS_COLORS[f.properties.dataset] || '#fff') + '55')
       .polygonSideColor(() => 'rgba(0,0,0,0)')
-      .polygonStrokeColor(f => DS_COLORS[f.properties.dataset] || '#fff')
-      .polygonAltitude(0.001)
+      .polygonStrokeColor(f => f.properties.scanned === false
+        ? '#ffa726' : (DS_COLORS[f.properties.dataset] || '#fff'))
+      // lifted off the surface so footprints don't z-fight with the globe
+      .polygonAltitude(0.008)
       .polygonLabel(f => {
         const p = f.properties;
         const date = p.acquisitionDate ? p.acquisitionDate.slice(0,10) : '—';
@@ -2624,18 +2681,32 @@ function _startGlobe() {
 document.getElementById('globe-btn').addEventListener('click', () => {
   globeMode = !globeMode;
   const mapEl = document.getElementById('map');
-  const globeEl = document.getElementById('globe-container');
+  const btn   = document.getElementById('globe-btn');
   mapEl.style.display = globeMode ? 'none' : '';
-  globeEl.style.display = globeMode ? 'block' : 'none';
-  document.getElementById('globe-btn').classList.toggle('on', globeMode);
-  document.getElementById('globe-btn').title = globeMode ? 'Switch to flat map' : 'Switch to globe view';
+  document.getElementById('globe-wrap').classList.toggle('on', globeMode);
+  btn.classList.toggle('on', globeMode);
+  btn.title = globeMode ? 'Switch to flat map' : 'Switch to globe view';
 
-  if (!globeMode) return;
+  if (!globeMode) {
+    // Leaflet mis-measures while hidden — re-measure now the map is back
+    setTimeout(() => map.invalidateSize(), 0);
+    return;
+  }
 
   if (typeof Globe === 'undefined') {
+    btn.textContent = '🌐 Loading…';
     const s = document.createElement('script');
-    s.src = '//unpkg.com/globe.gl';
-    s.onload = _startGlobe;
+    s.src = 'https://unpkg.com/globe.gl';
+    s.onload = () => { btn.textContent = '🌐 Globe'; _startGlobe(); };
+    s.onerror = () => {
+      btn.textContent = '🌐 Globe';
+      const o = document.getElementById('globe-too-many');
+      if (o) {
+        o.style.display = 'flex';
+        o.innerHTML = '<strong>Globe unavailable</strong>' +
+          '<p>Could not load the globe library. Check your connection and try again.</p>';
+      }
+    };
     document.head.appendChild(s);
   } else {
     _startGlobe();
