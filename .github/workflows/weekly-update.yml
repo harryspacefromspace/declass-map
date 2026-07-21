@@ -50,17 +50,60 @@ jobs:
         continue-on-error: true
         timeout-minutes: 45
 
-      - name: Step 2 — Build map from scenes.db
+      # The scene file is no longer in the repo, so pull the last published copy
+      # down first: fetch_and_build.py falls back to it per-dataset when a USGS
+      # search fails. Without it a flaky USGS run would silently drop scenes.
+      - name: Step 2 — Fetch previous scene data from R2 (fallback source)
+        continue-on-error: true
+        run: |
+          aws s3 cp "s3://${R2_BUCKET}/scenes.geojson" available_scenes.geojson \
+            --endpoint-url "https://${CF_ACCOUNT_ID}.r2.cloudflarestorage.com" \
+            || echo "no previous scene data in R2 yet — first run"
+          ls -la available_scenes.geojson 2>/dev/null || true
+        env:
+          R2_BUCKET: declass-map-data
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+
+      - name: Step 3 — Build map from scenes.db
         run: python fetch_and_build.py
         timeout-minutes: 60
         env:
           M2M_USERNAME: ${{ secrets.M2M_USERNAME }}
           M2M_TOKEN: ${{ secrets.M2M_TOKEN }}
 
+      # Scene data goes to R2, not the repo. Committing a ~55MB file daily grew
+      # .git past 590MB, and GitHub rejects anything over 100MB outright — which
+      # a full unscanned pull would exceed several times over.
+      - name: Step 4 — Upload scene data to R2
+        run: |
+          test -s available_scenes.geojson || { echo "no scene data to upload"; exit 1; }
+          aws s3 cp available_scenes.geojson \
+            "s3://${R2_BUCKET}/scenes.geojson" \
+            --endpoint-url "https://${CF_ACCOUNT_ID}.r2.cloudflarestorage.com" \
+            --content-type "application/json"
+          echo "uploaded $(du -h available_scenes.geojson | cut -f1)"
+        env:
+          R2_BUCKET: declass-map-data
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          # Recent AWS CLI versions send checksum headers that S3-compatible
+          # stores can reject. Only send them when the operation requires it.
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+
+      # index.html and scenes.db still belong in git — Pages deploys from the
+      # repo, and scenes.db is what tracks first-seen-available dates.
       - name: Commit updated files
         run: |
           git config user.name  "declass-map-bot"
           git config user.email "bot@users.noreply.github.com"
-          git add scenes.db index.html available_scenes.geojson
+          git add scenes.db index.html
           git diff --staged --quiet || git commit -m "Daily update $(date -u +%Y-%m-%d)"
           git push

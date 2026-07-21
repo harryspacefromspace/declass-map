@@ -1,1 +1,7 @@
 __pycache__/
+
+# Scene data now lives in R2, not the repo (see .github/workflows)
+available_scenes.geojson
+dist/
+node_modules/
+.wrangler/

@@ -1,0 +1,16 @@
+{
+  "$schema": "https://raw.githubusercontent.com/cloudflare/workers-sdk/main/packages/wrangler/config-schema.json",
+  "name": "declass-map",
+  "compatibility_date": "2026-07-01",
+
+  // The repo root holds the build script, scenes.db, monitor.py and so on.
+  // Only ./dist is published, so nothing else is exposed. `npm run build`
+  // copies index.html into it.
+  "pages_build_output_dir": "./dist",
+
+  // Scene data lives in a private bucket with no public access and no custom
+  // domain — it is readable only through this binding, from our own Function.
+  "r2_buckets": [
+    { "binding": "SCENES", "bucket_name": "declass-map-data" }
+  ]
+}

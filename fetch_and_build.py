@@ -1561,7 +1561,9 @@ body{{
 
 <script>
 let GEOJSON     = {{type:'FeatureCollection', features:[]}};  // populated from DATA_URL at load
-const DATA_URL  = 'https://raw.githubusercontent.com/harryspacefromspace/declass-map/main/available_scenes.geojson';
+// Same-origin path served by a Pages Function reading a private R2 bucket.
+// Same origin means no CORS, so no other site's JavaScript can fetch it.
+const DATA_URL  = '/data/scenes.geojson';
 const DS_COLORS = {ds_colors_json};
 // Rebuilt client-side instead of being stored on all 107k features
 const DS_LABELS = {ds_labels_json};
