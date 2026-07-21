@@ -3,7 +3,20 @@ name: Update Declassified Map
 on:
   schedule:
     - cron: "0 5 * * *"   # Every day at 5am UTC
-  workflow_dispatch:        # Manual trigger from GitHub Actions tab
+  workflow_dispatch:
+    inputs:
+      full_pull:
+        description: "Datasets to pull in full, scanned + unscanned (comma separated)"
+        default: "declassii"
+        type: string
+      fetch_budget:
+        description: "Seconds allowed for all USGS fetching before falling back"
+        default: "2400"
+        type: string
+      skip_commit:
+        description: "Skip committing index.html/scenes.db — scene data still goes to R2"
+        default: false
+        type: boolean
 
 jobs:
   update:
@@ -71,10 +84,15 @@ jobs:
 
       - name: Step 3 — Build map from scenes.db
         run: python fetch_and_build.py
-        timeout-minutes: 60
+        # Generous ceiling; FETCH_BUDGET_SECONDS is what actually bounds the
+        # fetching, and a full pull of all three datasets takes far longer.
+        timeout-minutes: 150
         env:
           M2M_USERNAME: ${{ secrets.M2M_USERNAME }}
           M2M_TOKEN: ${{ secrets.M2M_TOKEN }}
+          # On a schedule `inputs` is empty, so these fall back to the defaults
+          FULL_PULL_DATASETS: ${{ inputs.full_pull || 'declassii' }}
+          FETCH_BUDGET_SECONDS: ${{ inputs.fetch_budget || '2400' }}
 
       # Scene data goes to R2, not the repo. Committing a ~55MB file daily grew
       # .git past 590MB, and GitHub rejects anything over 100MB outright — which
@@ -101,6 +119,7 @@ jobs:
       # index.html and scenes.db still belong in git — Pages deploys from the
       # repo, and scenes.db is what tracks first-seen-available dates.
       - name: Commit updated files
+        if: ${{ inputs.skip_commit != true }}
         run: |
           git config user.name  "declass-map-bot"
           git config user.email "bot@users.noreply.github.com"

@@ -4026,14 +4026,16 @@ def main():
         print(f"Saved available_scenes.geojson (partial run — {', '.join(failed)} used fallback data)")
     else:
         print("Saved available_scenes.geojson (full run)")
-    print(f"  {size/1e6:.1f} MB")
-    # GitHub rejects any file over 100 MB outright, which would fail the push
-    # and leave the map stale. Shout well before that.
-    if size > 95_000_000:
-        print("  !! OVER GITHUB'S 100 MB FILE LIMIT — this push will be REJECTED.")
-        print("     Move the scene data to object storage (R2) before the next run.")
-    elif size > 70_000_000:
-        print(f"  !  {100 - size/1e6:.0f} MB of headroom left under GitHub's 100 MB limit.")
+    # This now goes to R2, not git, so GitHub's 100 MB file limit no longer
+    # applies. What matters instead is that every visitor downloads this file:
+    # it compresses to roughly a tenth, so ~10 MB raw is ~1 MB on the wire.
+    print(f"  {size/1e6:.1f} MB  (~{size/1e7:.1f} MB compressed on the wire)")
+    if size > 150_000_000:
+        print("  !! Very large for a single download — visitors fetch all of this")
+        print("     before the map draws. Time to move to tiles (PMTiles).")
+    elif size > 80_000_000:
+        print("  !  Getting heavy for a single download; tiles would serve only"
+              " what's in view.")
 
     print(f"\nDone — {len(all_features):,} scenes mapped.")
 
