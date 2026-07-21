@@ -358,10 +358,12 @@ def get_camera_from_entity(entity_id, dataset):
             return CORONA_CAMERA_LABELS.get(m.group(1), m.group(1))
     elif dataset == "declassii":
         # Hyphenated Mapping Camera format: DZB1216-500523L001001
-        m = re.match(r'DZB\d{4}-\d{6}([A-Z])\d{6}', entity_id)
+        # (DZC is the same layout — ~263 scenes went unlabelled while this
+        #  only matched DZB, leaving them with no camera or mission)
+        m = re.match(r'DZ[BC]\d{4}-\d{6}([A-Z])\d{6}', entity_id)
         if not m:
             # Non-hyphenated GAMBIT format: DZB00403800118H006001
-            m = re.match(r'DZB\d{11}([A-Z])\d{6}', entity_id)
+            m = re.match(r'DZ[BC]\d{11}([A-Z])\d{6}', entity_id)
         if m:
             return DECLASSII_CAMERA_LABELS.get(m.group(1), m.group(1))
     elif dataset == "declassiii":
@@ -386,7 +388,7 @@ def get_mission_from_entity(entity_id, dataset):
         if m:
             return str(int(m.group(1)))
     elif dataset == "declassii":
-        m = re.match(r'DZB(\d+)-', entity_id)
+        m = re.match(r'DZ[BC](\d+)-', entity_id)
         if m: return m.group(1)
     elif dataset == "declassiii":
         m = re.match(r'D3C(\d+)-', entity_id)
@@ -876,6 +878,17 @@ body{{
 .bm-btn:hover{{background:#333;border-color:#555;color:#fff}}
 .bm-btn.on{{background:#1a2a3a;border-color:#1976d2;color:#90caf9}}
 
+/* Frame-order slider */
+.fr-slider{{position:relative;height:30px;width:100%;cursor:pointer;user-select:none;touch-action:none}}
+.fr-track{{position:absolute;top:50%;left:7px;right:7px;height:3px;margin-top:-1.5px;background:#333;border-radius:2px}}
+.fr-fill{{position:absolute;top:50%;height:3px;margin-top:-1.5px;background:#42a5f5;border-radius:2px}}
+.fr-thumb{{position:absolute;top:50%;width:14px;height:14px;margin:-7px 0 0 -7px;border-radius:50%;
+  background:#42a5f5;box-shadow:0 0 0 3px rgba(66,165,245,.2);cursor:grab}}
+.fr-thumb:focus-visible{{outline:2px solid #90caf9;outline-offset:3px}}
+.fr-ticks{{display:flex;justify-content:space-between;align-items:baseline;font-size:11px;color:#666;margin-top:2px}}
+#fr-read{{color:#90caf9;font-variant-numeric:tabular-nums;font-weight:500}}
+.sb-seq{{color:#5b6470;font-variant-numeric:tabular-nums}}
+
 /* Recently-available chips */
 .rc-btn{{
   background:#2a2a2a;border:1px solid #3a3a3a;color:#aaa;
@@ -1348,6 +1361,28 @@ body{{
     </div>
   </div>
 
+  <!-- Frame order dropdown -->
+  <button class="tb-btn" id="tb-frame">⏱ Frame order <span class="tb-caret">▾</span></button>
+  <div class="dd-panel" id="dd-frame">
+    <div class="dd-inner">
+      <div class="dd-head"><div class="dd-label">Position in mission</div><button class="dd-clear" data-target="frame">Clear</button></div>
+      <div class="fr-slider" id="fr-slider">
+        <div class="fr-track"></div><div class="fr-fill"></div>
+      </div>
+      <div class="fr-ticks"><span>start</span><span id="fr-read">all frames</span><span>end</span></div>
+      <div class="dd-chips" style="margin-top:12px">
+        <button class="rc-btn" data-frame="10">First 10%</button>
+        <button class="rc-btn" data-frame="25">First 25%</button>
+        <button class="rc-btn" data-frame="50">First half</button>
+        <button class="rc-btn" data-frame="100">All</button>
+      </div>
+      <hr class="dd-divider">
+      <div class="dd-note">Orders each mission by acquisition date, then by the flight sequence in the scene ID,
+        and keeps the chosen slice. Useful when a camera degraded in flight — narrow to the earliest frames.
+        Applied per mission, so it works with several selected at once.</div>
+    </div>
+  </div>
+
   <!-- Recently available dropdown -->
   <button class="tb-btn" id="tb-recent">🆕 Recently available <span class="tb-caret">▾</span></button>
   <div class="dd-panel" id="dd-recent">
@@ -1445,6 +1480,7 @@ body{{
     <select id="sb-sort">
       <option value="date-desc">Newest acquired first</option>
       <option value="date-asc">Oldest acquired first</option>
+      <option value="seq-asc">Frame order (earliest first)</option>
       <option value="avail-desc">Recently available first</option>
       <option value="sat-asc">Satellite</option>
       <option value="mission-asc">Mission</option>
@@ -1583,6 +1619,8 @@ document.querySelectorAll('.cam-btn').forEach(b => {{
 let showUnscanned = false;
 let hidePublished = false;
 let recentDays = 0;   // 0 = off; else filter to scenes that became downloadable within N days
+// Frame-order window, as a percentage of each mission's flight sequence
+let frameLo = 0, frameHi = 100;
 let dateFilter = null;
 let globeMode = false;
 let globeInstance = null;
@@ -1612,7 +1650,7 @@ function buildLayers() {{
   Object.values(layers).forEach(l => {{ try {{ map.removeLayer(l); }} catch(e) {{}} }});
   visibleFeats = [];
 
-  const feats = GEOJSON.features.filter(f => {{
+  let feats = GEOJSON.features.filter(f => {{
     const p = f.properties;
     // Unscanned: only show if toggle is on, and satellite filter matches
     if (p.scanned === false) {{
@@ -1667,6 +1705,27 @@ function buildLayers() {{
     return true;
   }});
 
+  // Frame-order window — applied last, over whatever the other filters left.
+  // Ranked within each mission separately, since frame 1 of two different
+  // missions aren't comparable; "the first 25%" then means the first 25% of
+  // every mission on screen.
+  if (frameLo > 0 || frameHi < 100) {{
+    const groups = {{}};
+    for (const f of feats) {{
+      const p = f.properties;
+      const k = p.dataset + '|' + (p.mission || '?');
+      (groups[k] = groups[k] || []).push(f);
+    }}
+    const keep = new Set();
+    for (const g of Object.values(groups)) {{
+      g.sort(seqCompare);
+      const lo = Math.floor(g.length * frameLo / 100);
+      const hi = Math.ceil(g.length * frameHi / 100);
+      for (let i = lo; i < hi; i++) keep.add(g[i]);
+    }}
+    feats = feats.filter(f => keep.has(f));
+  }}
+
   const byDs = {{}};
   const unscannedFeats = [];
   feats.forEach(f => {{
@@ -1719,12 +1778,55 @@ function updateCounter(n) {{
 }}
 
 // ── Load scene data (external file keeps index.html small) ────────────────────
-// `year` isn't stored per-feature; derive it once here so the filter stays fast.
+// Scene IDs encode a flight sequence after the mission number:
+//   DS008003 016 DV 001  ->  mission, sequence segment, camera, frame
+// Parsed here rather than stored, so it costs nothing in the served file.
+const SEQ_PATS = {{
+  corona2: [
+    /^DS(\\d{{5}}A)(\\d{{3}})([A-Z]{{2}})(\\d+)$/,
+    /^DS(\\d{{6}})(\\d{{3}})([A-Z]{{2}})(\\d+)$/,
+    /^DS(\\d{{4}})-(\\d{{4}})([A-Z]{{2}})(\\d+)$/
+  ],
+  declassii: [
+    /^DZ[BC](\\d{{4}})-(\\d{{6}})([A-Z])(\\d+)$/,
+    /^DZ[BC](\\d{{6}})(\\d{{5}})([A-Z])(\\d+)$/
+  ],
+  declassiii: [
+    /^D3C(\\d+)-(\\d+)([A-Z])(\\d+)$/
+  ]
+}};
+function parseSeq(entityId, dataset) {{
+  const pats = SEQ_PATS[dataset] || [];
+  for (const re of pats) {{
+    const m = entityId.match(re);
+    if (m) return {{seq: parseInt(m[2], 10), frame: parseInt(m[4], 10)}};
+  }}
+  return null;
+}}
+
+// True flight order. Date first: sequence segments are only reliable *within*
+// a day (verified across the archive — segment alone is right ~60% of the time,
+// date+segment is 100%). Unparsed scenes sort last rather than jumping the queue.
+function seqCompare(a, b) {{
+  const pa = a.properties, pb = b.properties;
+  const da = pa.acquisitionDate || '', db = pb.acquisitionDate || '';
+  if (da !== db) return da < db ? -1 : 1;
+  const sa = pa.seq   == null ? Infinity : pa.seq,   sb = pb.seq   == null ? Infinity : pb.seq;
+  if (sa !== sb) return sa - sb;
+  const fa = pa.frame == null ? Infinity : pa.frame, fb = pb.frame == null ? Infinity : pb.frame;
+  if (fa !== fb) return fa - fb;
+  return (pa.entityId || '').localeCompare(pb.entityId || '');
+}}
+
+// `year`/`seq`/`frame` aren't stored per-feature; derive once so filters stay fast.
 function hydrate(feats) {{
   for (const f of feats) {{
     const p = f.properties;
     const y = parseInt((p.acquisitionDate || '').slice(0, 4), 10);
     p.year = isNaN(y) ? null : y;
+    const s = parseSeq(p.entityId || '', p.dataset);
+    p.seq = s ? s.seq : null;
+    p.frame = s ? s.frame : null;
   }}
 }}
 
@@ -1937,6 +2039,7 @@ function featsInView() {{
 }}
 
 const SB_SORTS = {{
+  'seq-asc':    seqCompare,   // true flight order: date, then scene sequence
   'date-desc':  (a,b) => (b.properties.acquisitionDate||'').localeCompare(a.properties.acquisitionDate||''),
   'date-asc':   (a,b) => (a.properties.acquisitionDate||'').localeCompare(b.properties.acquisitionDate||''),
   'avail-desc': (a,b) => (b.properties.firstSeenAvailable||'').localeCompare(a.properties.firstSeenAvailable||''),
@@ -1988,7 +2091,7 @@ function updateSidebar(resetPage) {{
       ${{thumb}}
       <div class="sb-meta">
         <div class="sb-id">${{p.entityId}}</div>
-        <div class="sb-sub">${{d}} · ${{p.satellite || '—'}}</div>
+        <div class="sb-sub">${{d}} · ${{p.satellite || '—'}}${{p.seq != null ? ' · <span class="sb-seq">seq ' + p.seq + '·' + p.frame + '</span>' : ''}}</div>
         <div class="sb-tags">${{tags.join('')}}</div>
       </div>
       ${{cartCell}}
@@ -2327,6 +2430,9 @@ function resetAllFilters() {{
   // Recently available
   recentDays = 0;
   document.querySelectorAll('.rc-btn').forEach(b => b.classList.remove('on'));
+  // Frame order
+  frameLo = 0; frameHi = 100;
+  if (window.paintFrameSlider) window.paintFrameSlider();
   // Search
   searchQ=''; document.getElementById('search').value='';
   buildLayers();
@@ -2360,6 +2466,9 @@ document.querySelectorAll('.dd-clear').forEach(btn => {{
     }} else if (t === 'recent') {{
       recentDays = 0;
       document.querySelectorAll('.rc-btn').forEach(b => b.classList.remove('on'));
+    }} else if (t === 'frame') {{
+      frameLo = 0; frameHi = 100;
+      if (window.paintFrameSlider) window.paintFrameSlider();
     }}
     buildLayers();
   }});
@@ -2406,6 +2515,11 @@ function updateFilterSummary() {{
   if (recentDays > 0) {{
     const lbl = {{1:'24h', 7:'7 days', 30:'30 days', 90:'90 days'}}[recentDays] || recentDays+'d';
     pills.push(`<span class="fs-pill">🆕 New ≤ ${{lbl}}<button data-action="recent">×</button></span>`);
+  }}
+
+  // Frame order
+  if (frameLo > 0 || frameHi < 100) {{
+    pills.push(`<span class="fs-pill">⏱ Frames ${{frameLo}}–${{frameHi}}%<button data-action="frame">×</button></span>`);
   }}
 
   // Missions — one pill per dataset, never one per mission number
@@ -2463,6 +2577,9 @@ function updateFilterSummary() {{
       }} else if (action === 'recent') {{
         recentDays = 0;
         document.querySelectorAll('.rc-btn').forEach(b => b.classList.remove('on'));
+      }} else if (action === 'frame') {{
+        frameLo = 0; frameHi = 100;
+        if (window.paintFrameSlider) window.paintFrameSlider();
       }}
       buildLayers();
     }});
@@ -2476,6 +2593,58 @@ document.querySelectorAll('.cam-btn').forEach(btn => {{
     cameraActive[key] = !cameraActive[key];
     btn.classList.toggle('on', cameraActive[key]);
     buildLayers();
+  }});
+}});
+
+// ── Frame-order slider ────────────────────────────────────────────────────────
+(function initFrameSlider() {{
+  const el = document.getElementById('fr-slider');
+  const fill = el.querySelector('.fr-fill');
+  const thumbs = [0, 1].map(i => {{
+    const t = document.createElement('div');
+    t.className = 'fr-thumb'; t.tabIndex = 0; t.setAttribute('role', 'slider');
+    t.setAttribute('aria-label', i === 0 ? 'Start of range' : 'End of range');
+    el.appendChild(t); return t;
+  }});
+  let drag = null;
+  const pos = v => 7 + v / 100 * (el.clientWidth - 14);
+  window.paintFrameSlider = function () {{
+    thumbs[0].style.left = pos(frameLo) + 'px';
+    thumbs[1].style.left = pos(frameHi) + 'px';
+    fill.style.left = pos(frameLo) + 'px';
+    fill.style.width = Math.max(0, pos(frameHi) - pos(frameLo)) + 'px';
+    thumbs[0].setAttribute('aria-valuenow', frameLo);
+    thumbs[1].setAttribute('aria-valuenow', frameHi);
+    document.getElementById('fr-read').textContent =
+      (frameLo === 0 && frameHi === 100) ? 'all frames' : frameLo + '%–' + frameHi + '%';
+  }};
+  const valAt = clientX => {{
+    const r = el.getBoundingClientRect();
+    return Math.round(Math.max(0, Math.min(1, (clientX - r.left - 7) / (r.width - 14))) * 100);
+  }};
+  function apply(v) {{
+    if (drag === 0) frameLo = Math.min(v, frameHi); else frameHi = Math.max(v, frameLo);
+    window.paintFrameSlider(); buildLayers();
+  }}
+  el.addEventListener('pointerdown', e => {{
+    const v = valAt(e.clientX);
+    drag = Math.abs(v - frameLo) <= Math.abs(v - frameHi) ? 0 : 1;
+    el.setPointerCapture(e.pointerId); apply(v);
+  }});
+  el.addEventListener('pointermove', e => {{ if (drag !== null) apply(valAt(e.clientX)); }});
+  ['pointerup','pointercancel'].forEach(ev => el.addEventListener(ev, () => {{ drag = null; }}));
+  thumbs.forEach((t, i) => t.addEventListener('keydown', e => {{
+    const d = e.key === 'ArrowLeft' ? -1 : e.key === 'ArrowRight' ? 1 : 0;
+    if (!d) return;
+    e.preventDefault(); drag = i; apply((i === 0 ? frameLo : frameHi) + d); drag = null;
+  }}));
+  window.paintFrameSlider();
+}})();
+
+document.querySelectorAll('[data-frame]').forEach(btn => {{
+  btn.addEventListener('click', () => {{
+    frameLo = 0; frameHi = parseInt(btn.dataset.frame, 10);
+    window.paintFrameSlider(); buildLayers();
   }});
 }});
 
@@ -2515,6 +2684,7 @@ const DD_PAIRS = [
   ['tb-cam',     'dd-cam'],
   ['tb-date',    'dd-date'],
   ['tb-mission', 'dd-mission'],
+  ['tb-frame',   'dd-frame'],
   ['tb-recent',  'dd-recent'],
 ];
 
@@ -2618,6 +2788,7 @@ function updateToolbarState() {{
   document.getElementById('tb-mission').classList.toggle('has-filter', missionFiltered);
 
   document.getElementById('tb-recent').classList.toggle('has-filter', recentDays > 0);
+  document.getElementById('tb-frame').classList.toggle('has-filter', frameLo > 0 || frameHi < 100);
 }}
 
 // ── Mission checkboxes
