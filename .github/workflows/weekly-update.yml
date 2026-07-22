@@ -125,6 +125,13 @@ jobs:
           AWS_REQUEST_CHECKSUM_CALCULATION: when_required
           AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
 
+      # sfs-admin resolves entity IDs against this. It can't read the scene data
+      # from R2 (private bucket, Worker behind Access with a same-origin check),
+      # so the three fields it needs are published here instead — dictionary
+      # encoded and gzipped, which is ~0.6MB rather than the 111MB full file.
+      - name: Step 4d — Rebuild the compact scene index
+        run: python make_scene_index.py available_scenes.geojson scene-index.json.gz
+
       # Overlay sites come from OSM via Overpass, which rate-limits and times
       # out under load. A failure here must not fail the run or blank the
       # overlays, so on error we keep whatever is already published in R2.
@@ -232,6 +239,6 @@ jobs:
         run: |
           git config user.name  "declass-map-bot"
           git config user.email "bot@users.noreply.github.com"
-          git add scenes.db index.html
+          git add scenes.db index.html scene-index.json.gz
           git diff --staged --quiet || git commit -m "Daily update $(date -u +%Y-%m-%d)"
           git push
