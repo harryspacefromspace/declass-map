@@ -223,21 +223,29 @@ function report() {
       n.toLocaleString() + '</b> footprints on screen' + paint;
   }
 }
-// Populated from whatever the footprint tiles actually contain — which means
-// it stays empty until the map has been at z5+ at least once.
-let satsFilled = false;
+// Populated from whatever the footprint tiles actually contain, which means it
+// stays empty until the map has been at z5+ at least once — and that a single
+// pass only ever sees the satellites in view at that moment. Keep accumulating
+// as new tiles arrive instead of locking after the first fill, or a satellite
+// that isn't over the opening view (KH-1 and KH-2 were both missing this way)
+// never becomes selectable.
+const satsSeen = new Set();
 function fillSatellites() {
-  if (satsFilled || map.getZoom() < 5) return;
-  const seen = new Set();
+  if (map.getZoom() < 5) return;
+  let added = false;
   for (const f of map.querySourceFeatures('scenes', { sourceLayer: 'scenes' })) {
-    if (f.properties.satellite) seen.add(f.properties.satellite);
+    const s = f.properties.satellite;
+    if (s && !satsSeen.has(s)) { satsSeen.add(s); added = true; }
   }
-  if (!seen.size) return;
-  for (const s of [...seen].sort()) {
+  if (!added) return;
+
+  const sel = el('f-sat'), keep = sel.value;
+  sel.innerHTML = '<option value="">All</option>';
+  for (const s of [...satsSeen].sort()) {
     const o = document.createElement('option'); o.value = o.textContent = s;
-    el('f-sat').appendChild(o);
+    sel.appendChild(o);
   }
-  satsFilled = true;
+  sel.value = keep;          // rebuilding the list must not drop the selection
 }
 
 map.on('load', () => {
