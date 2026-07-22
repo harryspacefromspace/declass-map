@@ -1,7 +1,17 @@
 __pycache__/
 
-# Scene data now lives in R2, not the repo (see .github/workflows)
+# Scene data now lives in R2, not the repo (see .github/workflows). Committing
+# it grew .git past 590MB, and a full unscanned pull is several times the 100MB
+# limit GitHub rejects outright.
 available_scenes.geojson
+scenes.geojson
+working_scenes.geojson
+centroids.geojson
+
+# Vector tile build artefacts — rebuilt from the scene data, published to R2.
+*.mbtiles
+*.pmtiles
+
 dist/
 node_modules/
 .wrangler/

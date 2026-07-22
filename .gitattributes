@@ -1,0 +1,5 @@
+# Font glyph ranges are binary protobuf — CRLF conversion would corrupt them,
+# and a corrupted glyph range means no count labels on the zoomed-out cells.
+*.pbf binary
+*.mbtiles binary
+*.pmtiles binary

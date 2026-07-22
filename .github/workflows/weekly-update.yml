@@ -21,6 +21,10 @@ on:
         description: "Skip committing index.html/scenes.db — scene data still goes to R2"
         default: false
         type: boolean
+      build_tiles:
+        description: "Rebuild the PMTiles vector tile archive and publish it to R2"
+        default: true
+        type: boolean
 
 jobs:
   update:
@@ -118,6 +122,73 @@ jobs:
           AWS_DEFAULT_REGION: auto
           # Recent AWS CLI versions send checksum headers that S3-compatible
           # stores can reject. Only send them when the operation requires it.
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+
+      # The map can't load a 111MB GeoJSON — the browser gives out somewhere
+      # between 108k and 214k features. Vector tiles fix that by transferring
+      # only the tiles in view (~175KB to open the map), so the archive can keep
+      # growing without the front end caring.
+      - name: Step 5 — Install tippecanoe and pmtiles
+        if: ${{ inputs.build_tiles != false }}
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential libsqlite3-dev zlib1g-dev
+          git clone --depth 1 https://github.com/felt/tippecanoe /tmp/tippecanoe
+          make -C /tmp/tippecanoe -j"$(nproc)" > /dev/null
+          sudo make -C /tmp/tippecanoe install
+          tippecanoe --version
+          PM_URL=$(curl -sL https://api.github.com/repos/protomaps/go-pmtiles/releases/latest \
+            | grep -oE '"browser_download_url": *"[^"]*Linux_x86_64\.tar\.gz"' \
+            | head -1 | sed 's/.*"\(https[^"]*\)"/\1/')
+          curl -sL "$PM_URL" | sudo tar xz -C /usr/local/bin pmtiles
+          pmtiles version
+
+      - name: Step 6 — Build the vector tile archive
+        if: ${{ inputs.build_tiles != false }}
+        run: |
+          test -s available_scenes.geojson || { echo "no scene data to tile"; exit 1; }
+          python make_centroids.py available_scenes.geojson centroids.geojson
+
+          # Footprints, z5-8. Stopping at 8 is fine: these are quadrilaterals, so
+          # simplification keeps all four corners and the client overzooms them
+          # cleanly past that. displayId duplicates entityId and the browse URL
+          # is derivable — both would otherwise repeat in every tile they touch.
+          tippecanoe -o footprints.mbtiles -l scenes -Z5 -z8 \
+            -x displayId -x browse \
+            --no-tiny-polygon-reduction \
+            --drop-densest-as-needed \
+            --force available_scenes.geojson
+
+          # Counts, z0-4. tippecanoe clusters the centroids per zoom and sums the
+          # tallies, which is what lets the scanned/unscanned toggle keep working
+          # when there's no geometry left to draw.
+          tippecanoe -o cells.mbtiles -l cells -Z0 -z4 \
+            --cluster-distance=52 \
+            --accumulate-attribute=n:sum \
+            --accumulate-attribute=ns:sum \
+            --accumulate-attribute=nu:sum \
+            --force centroids.geojson
+
+          tile-join -o combined.mbtiles --force footprints.mbtiles cells.mbtiles
+          pmtiles convert combined.mbtiles scenes.pmtiles
+          pmtiles show scenes.pmtiles | head -12
+          ls -lh scenes.pmtiles
+
+      - name: Step 7 — Upload vector tiles to R2
+        if: ${{ inputs.build_tiles != false }}
+        run: |
+          test -s scenes.pmtiles || { echo "no tile archive to upload"; exit 1; }
+          aws s3 cp scenes.pmtiles "s3://${R2_BUCKET}/scenes.pmtiles" \
+            --endpoint-url "https://${CF_ACCOUNT_ID}.r2.cloudflarestorage.com" \
+            --content-type "application/octet-stream"
+          echo "uploaded $(du -h scenes.pmtiles | cut -f1) of tiles"
+        env:
+          R2_BUCKET: declass-map-data
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
           AWS_REQUEST_CHECKSUM_CALCULATION: when_required
           AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
 

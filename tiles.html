@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Declassified footprints — vector tile preview</title>
+<link href="vendor/maplibre-gl.css" rel="stylesheet">
+<style>
+  :root { --panel:#11161eee; --edge:#2a3441; --ink:#e6edf3; --dim:#8b98a9; --hi:#f0b429; }
+  html,body { margin:0; height:100%; background:#0b0e13; color:var(--ink);
+              font:13px/1.45 ui-sans-serif,system-ui,-apple-system,sans-serif; }
+  #map { position:absolute; inset:0; }
+  #panel { position:absolute; top:12px; left:12px; z-index:5; width:230px;
+           background:var(--panel); border:1px solid var(--edge); border-radius:10px;
+           padding:12px 14px; backdrop-filter:blur(6px); }
+  #panel h1 { margin:0 0 2px; font-size:13px; letter-spacing:.02em; }
+  .sub { color:var(--dim); font-size:11px; margin-bottom:10px; }
+  .row { display:flex; align-items:center; gap:7px; margin:5px 0; }
+  .row label { flex:1; cursor:pointer; }
+  .sw { width:11px; height:11px; border-radius:2px; flex:none; }
+  select, input[type=range] { width:100%; background:#0b0e13; color:var(--ink);
+           border:1px solid var(--edge); border-radius:5px; padding:4px; font:inherit; }
+  hr { border:0; border-top:1px solid var(--edge); margin:11px 0; }
+  #stat { color:var(--dim); font-size:11px; }
+  #stat b { color:var(--hi); font-variant-numeric:tabular-nums; }
+  .hint { color:var(--dim); font-size:10.5px; margin-top:9px; line-height:1.35; }
+  .maplibregl-popup-content { background:#11161e; color:var(--ink); font-size:12px;
+           border:1px solid var(--edge); border-radius:8px; padding:9px 11px; }
+  .maplibregl-popup-content b { color:var(--hi); }
+  .maplibregl-popup-tip { border-top-color:#11161e !important;
+           border-bottom-color:#11161e !important; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="panel">
+  <h1>Vector tile preview</h1>
+  <div class="sub">213,952 footprints · PMTiles from R2</div>
+
+  <div class="row"><span class="sw" style="background:#f0b429"></span>
+    <label for="f-scanned">Scanned</label>
+    <input type="checkbox" id="f-scanned" checked></div>
+  <div class="row"><span class="sw" style="background:#8b5cf6"></span>
+    <label for="f-unscanned">Not scanned</label>
+    <input type="checkbox" id="f-unscanned" checked></div>
+
+  <hr>
+  <label for="f-sat" class="sub" style="display:block;margin-bottom:4px">Satellite</label>
+  <select id="f-sat"><option value="">All</option></select>
+
+  <label for="f-year" class="sub" style="display:block;margin:9px 0 4px">
+    From year <b id="year-val" style="color:var(--hi)">any</b></label>
+  <input type="range" id="f-year" min="1959" max="1984" value="1959">
+
+  <hr>
+  <div id="stat">loading…</div>
+  <div class="hint">Zoomed out you get density and per-cell counts; from zoom 5
+    the footprints themselves. Click a cell to zoom in, a footprint for its
+    metadata. Satellite and year filters apply to footprints only.</div>
+</div>
+
+<script src="vendor/maplibre-gl.js"></script>
+<script src="vendor/pmtiles.js"></script>
+<script>
+const t0 = performance.now();
+const SRC = location.origin + '/data/scenes.pmtiles';
+
+const proto = new pmtiles.Protocol();
+maplibregl.addProtocol('pmtiles', proto.tile);
+proto.add(new pmtiles.PMTiles(SRC));
+
+const map = new maplibregl.Map({
+  container: 'map',
+  center: [78.0, 27.0],
+  zoom: 6,
+  maxZoom: 15,
+  hash: true,                     // shareable view, same idea as the main map
+  style: {
+    version: 8,
+    glyphs: 'vendor/fonts/{fontstack}/{range}.pbf',
+    sources: {
+      base: {
+        type: 'raster',
+        tiles: ['https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
+                'https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png'],
+        tileSize: 256,
+        attribution: '&copy; OpenStreetMap, &copy; CARTO · USGS/NASA',
+      },
+      // One archive, two layers inside it: 'cells' (counts) at z0-4,
+      // 'scenes' (footprints) at z5-8.
+      scenes: { type: 'vector', url: 'pmtiles://' + SRC, minzoom: 0, maxzoom: 8 },
+    },
+    layers: [
+      { id: 'base', type: 'raster', source: 'base',
+        paint: { 'raster-opacity': 0.75 } },
+
+      // --- zoomed out: density, then counts ---------------------------------
+      { id: 'heat', type: 'heatmap', source: 'scenes', 'source-layer': 'cells',
+        maxzoom: 5,
+        paint: {
+          'heatmap-weight': ['interpolate', ['linear'], ['get', 'n'], 0, 0, 400, 1],
+          // Wide enough that adjacent cells bleed into one another — at a
+          // tighter radius each point just becomes a halo round its own bubble.
+          'heatmap-intensity': ['interpolate', ['linear'], ['zoom'], 0, 0.7, 4, 1.0],
+          'heatmap-radius': ['interpolate', ['linear'], ['zoom'], 0, 45, 2, 75, 4, 105],
+          'heatmap-opacity': ['interpolate', ['linear'], ['zoom'], 4, 0.85, 5, 0],
+          'heatmap-color': ['interpolate', ['linear'], ['heatmap-density'],
+            0.00, 'rgba(11,14,19,0)',   0.18, 'rgba(72,52,120,0.55)',
+            0.40, 'rgba(140,74,132,0.72)', 0.62, 'rgba(206,110,86,0.85)',
+            0.82, 'rgba(240,180,41,0.93)', 1.00, 'rgba(255,246,222,1)'],
+        } },
+      { id: 'cells', type: 'circle', source: 'scenes', 'source-layer': 'cells',
+        maxzoom: 5,
+        paint: {
+          // Translucent so the density underneath still reads through.
+          'circle-color': 'rgba(13,17,24,0.62)',
+          'circle-stroke-color': '#f0b429',
+          'circle-stroke-width': 1.2,
+          'circle-opacity': ['interpolate', ['linear'], ['zoom'], 4, 0.92, 5, 0],
+          'circle-stroke-opacity': ['interpolate', ['linear'], ['zoom'], 4, 0.85, 5, 0],
+          'circle-radius': 10,
+        } },
+      { id: 'cells-count', type: 'symbol', source: 'scenes', 'source-layer': 'cells',
+        maxzoom: 5,
+        layout: { 'text-font': ['NotoSans'],
+                  // Bigger buckets get bigger numbers, so the eye sorts them
+                  // without reading every one.
+                  'text-size': ['interpolate', ['linear'], ['sqrt', ['get','n']],
+                                0, 9.5, 20, 12, 80, 15, 200, 18],
+                  'text-allow-overlap': false, 'text-padding': 3, 'text-field': '' },
+        paint: { 'text-color': '#fbf1dc',
+                 'text-halo-color': 'rgba(9,12,17,0.85)', 'text-halo-width': 1.1,
+                 'text-opacity': ['interpolate', ['linear'], ['zoom'], 4, 1, 5, 0] } },
+      // --- zoomed in: the footprints themselves ------------------------------
+      { id: 'fill', type: 'fill', source: 'scenes', 'source-layer': 'scenes',
+        minzoom: 5,
+        paint: {
+          'fill-color': ['case', ['==', ['get','scanned'], false], '#8b5cf6', '#f0b429'],
+          // Thin out the fill as you zoom out, or dense regions turn to mush.
+          'fill-opacity': ['interpolate', ['linear'], ['zoom'],
+                           5, 0.035, 8, 0.07, 12, 0.13],
+        } },
+      { id: 'line', type: 'line', source: 'scenes', 'source-layer': 'scenes',
+        minzoom: 5,
+        paint: {
+          'line-color': ['case', ['==', ['get','scanned'], false], '#a78bfa', '#f6c453'],
+          'line-width': ['interpolate', ['linear'], ['zoom'], 5, 0.35, 9, 0.7, 13, 1.2],
+          'line-opacity': ['interpolate', ['linear'], ['zoom'], 5, 0.5, 9, 0.8],
+        } },
+    ],
+  },
+});
+map.addControl(new maplibregl.NavigationControl({ visualizePitch: false }), 'top-right');
+map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-right');
+
+// ---- filters, as MapLibre expressions rather than JS array work -------------
+const el = id => document.getElementById(id);
+function applyFilter() {
+  const scanned = el('f-scanned').checked, unscanned = el('f-unscanned').checked;
+  const sat = el('f-sat').value;
+  const year = Number(el('f-year').value);
+  const clauses = ['all'];
+
+  if (scanned && !unscanned)      clauses.push(['!=', ['get','scanned'], false]);
+  else if (!scanned && unscanned) clauses.push(['==', ['get','scanned'], false]);
+  else if (!scanned && !unscanned) clauses.push(['==', ['get','scanned'], '__none__']);
+
+  if (sat) clauses.push(['==', ['get','satellite'], sat]);
+  if (year > 1959) {
+    // acquisitionDate is "YYYY-MM-DD ..."; a string compare on the year is
+    // enough and avoids parsing dates per feature per frame.
+    clauses.push(['>=', ['slice', ['get','acquisitionDate'], 0, 4], String(year)]);
+  }
+
+  const f = clauses.length > 1 ? clauses : null;
+  map.setFilter('fill', f);
+  map.setFilter('line', f);
+
+  // The count cells carry three tallies rather than geometry, so the
+  // scanned/unscanned toggle switches which tally is drawn. Satellite and year
+  // can't be applied to a pre-aggregated count — those only bite from z5 up.
+  const field = (scanned && unscanned) ? 'n' : scanned ? 'ns' : unscanned ? 'nu' : null;
+  if (field) {
+    const v = ['get', field];
+    map.setFilter('cells',       ['>', v, 0]);
+    map.setFilter('cells-count', ['>', v, 0]);
+    map.setFilter('heat',        ['>', v, 0]);
+    map.setPaintProperty('cells', 'circle-radius',
+      ['interpolate', ['linear'], ['sqrt', v], 0, 4, 10, 9, 40, 15, 100, 22, 250, 32]);
+    map.setPaintProperty('heat', 'heatmap-weight',
+      ['interpolate', ['linear'], v, 0, 0, 400, 1]);
+    map.setLayoutProperty('cells-count', 'text-field',
+      ['case', ['>=', v, 1000],
+        ['concat', ['to-string', ['round', ['/', v, 1000]]], 'k'],
+        ['to-string', v]]);
+  } else {
+    for (const l of ['cells', 'cells-count', 'heat']) map.setFilter(l, ['==', ['get','n'], -1]);
+  }
+
+  el('year-val').textContent = year > 1959 ? year : 'any';
+  report();
+}
+['f-scanned','f-unscanned','f-sat','f-year'].forEach(id =>
+  el(id).addEventListener('input', applyFilter));
+
+// ---- what's actually on screen ---------------------------------------------
+let firstPaint = null;
+function report() {
+  if (!map.isStyleLoaded()) return;
+  const z = map.getZoom();
+  const paint = firstPaint ? '<br>first paint <b>' + firstPaint + ' ms</b>' : '';
+  if (z < 5) {
+    const cells = map.queryRenderedFeatures({ layers: ['cells'] });
+    const field = el('f-scanned').checked && el('f-unscanned').checked ? 'n'
+                : el('f-scanned').checked ? 'ns'
+                : el('f-unscanned').checked ? 'nu' : null;
+    const total = field ? cells.reduce((s, c) => s + (c.properties[field] || 0), 0) : 0;
+    el('stat').innerHTML = 'zoom <b>' + z.toFixed(1) + '</b> · <b>' +
+      total.toLocaleString() + '</b> scenes in <b>' + cells.length + '</b> cells' + paint;
+  } else {
+    const n = map.queryRenderedFeatures({ layers: ['fill'] }).length;
+    el('stat').innerHTML = 'zoom <b>' + z.toFixed(1) + '</b> · <b>' +
+      n.toLocaleString() + '</b> footprints on screen' + paint;
+  }
+}
+// Populated from whatever the footprint tiles actually contain — which means
+// it stays empty until the map has been at z5+ at least once.
+let satsFilled = false;
+function fillSatellites() {
+  if (satsFilled || map.getZoom() < 5) return;
+  const seen = new Set();
+  for (const f of map.querySourceFeatures('scenes', { sourceLayer: 'scenes' })) {
+    if (f.properties.satellite) seen.add(f.properties.satellite);
+  }
+  if (!seen.size) return;
+  for (const s of [...seen].sort()) {
+    const o = document.createElement('option'); o.value = o.textContent = s;
+    el('f-sat').appendChild(o);
+  }
+  satsFilled = true;
+}
+
+map.on('load', () => {
+  firstPaint = Math.round(performance.now() - t0);
+  applyFilter();          // seeds the count-cell expressions
+  fillSatellites();
+  report();
+});
+
+// A cell is a bucket, not a scene — clicking one drills into it.
+map.on('click', 'cells', (e) => {
+  map.easeTo({ center: e.features[0].geometry.coordinates,
+               zoom: Math.min(map.getZoom() + 2.5, 8), duration: 700 });
+});
+for (const l of ['cells', 'cells-count']) {
+  map.on('mouseenter', l, () => map.getCanvas().style.cursor = 'pointer');
+  map.on('mouseleave', l, () => map.getCanvas().style.cursor = '');
+}
+map.on('idle', () => { fillSatellites(); report(); });
+map.on('moveend', report);
+
+// ---- popup ------------------------------------------------------------------
+const LABEL = { entityId:'Entity ID', acquisitionDate:'Acquired', satellite:'Satellite',
+                mission:'Mission', camera:'Camera', scanned:'Scanned',
+                firstSeenAvailable:'First seen', dataset:'Dataset' };
+map.on('click', 'fill', (e) => {
+  const p = e.features[0].properties;
+  const rows = Object.keys(LABEL).filter(k => p[k] !== undefined && p[k] !== '')
+    .map(k => {
+      let v = p[k];
+      if (k === 'scanned') v = (v === false || v === 'false') ? 'no' : 'yes';
+      if (k === 'acquisitionDate') v = String(v).slice(0, 10);
+      return '<b>' + LABEL[k] + '</b> · ' + v;
+    });
+  new maplibregl.Popup({ closeButton: true, maxWidth: '280px' })
+    .setLngLat(e.lngLat).setHTML(rows.join('<br>')).addTo(map);
+});
+map.on('mouseenter', 'fill', () => map.getCanvas().style.cursor = 'pointer');
+map.on('mouseleave', 'fill', () => map.getCanvas().style.cursor = '');
+</script>
+</body>
+</html>
