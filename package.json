@@ -5,5 +5,8 @@
   "description": "Interactive map of declassified US satellite imagery footprints",
   "scripts": {
     "build": "node build-dist.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "^4.113.0"
   }
 }

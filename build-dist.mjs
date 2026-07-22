@@ -12,6 +12,8 @@ const PUBLISH = [
   // Vector-tile preview: reads /data/scenes.pmtiles by range request instead
   // of pulling the whole scene file. Vendored so the page has no CDN deps.
   'tiles.html',
+  // Step through a mission's frames in flight order, by entity ID.
+  'frames.html',
   'vendor/maplibre-gl.js',
   'vendor/maplibre-gl.css',
   'vendor/pmtiles.js',

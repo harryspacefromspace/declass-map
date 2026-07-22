@@ -29,7 +29,22 @@ const SERVABLE = new Map([
   // Satellite/mission/camera/year counts over the whole archive. The tile map
   // can't count its own filter options — it only holds the tiles in view.
   ['facets.json', 'application/json; charset=utf-8'],
+  // Catalogue of the per-mission frame files below.
+  ['frames/_missions.json', 'application/json; charset=utf-8'],
 ]);
+
+// One file per mission, in flight order, for the frame browser. Matched by
+// shape rather than listed one by one — there are 159 of them and the set moves
+// with the archive. The pattern is deliberately strict: lowercase dataset,
+// alphanumeric mission, nothing else, so this can't be walked or escaped with
+// dots or slashes.
+const FRAME_FILE = /^frames\/[a-z0-9]+_[0-9]+[A-Z]?\.json$/;
+
+function contentTypeFor(key) {
+  if (SERVABLE.has(key)) return SERVABLE.get(key);
+  if (FRAME_FILE.test(key)) return 'application/json; charset=utf-8';
+  return null;
+}
 
 // PMTiles works by reading a few byte ranges out of a large archive: the header
 // and directory first, then only the tiles in view. Without Range support the
@@ -66,9 +81,65 @@ function rangeSpec(header) {
 // R2 signals an out-of-bounds range by throwing rather than returning null.
 const isRangeError = (e) => String(e && e.message || e).toLowerCase().includes('range');
 
+// USGS serves browse images with `X-Content-Type-Options: nosniff` and no CORS
+// headers, and rejects some cross-origin request patterns outright with a 500.
+// Chromium's Opaque Response Blocking then refuses to paint them in an <img>.
+// Proxying them through our own origin sidesteps both: the browser sees a
+// same-origin image, and we can add the caching headers USGS omits so the edge
+// serves repeats without hitting them again.
+const BROWSE_HOST = 'ims.cr.usgs.gov';
+// declassN / DIT path segments only, so this can't be turned into a general
+// open proxy for arbitrary URLs.
+const BROWSE_PATH = /^\/(browse|thumbnail)\/[\w./-]+\.jpg$/i;
+
+async function proxyBrowse(request, url, ctx) {
+  const target = url.pathname.slice('/img/'.length);      // e.g. browse/DIT/…jpg
+  const path = '/' + target;
+  if (!BROWSE_PATH.test(path)) {
+    return new Response('Not found', { status: 404 });
+  }
+
+  const upstream = `https://${BROWSE_HOST}${path}`;
+  const cache = caches.default;
+  const cacheKey = new Request(upstream, { method: 'GET' });
+
+  let hit = await cache.match(cacheKey);
+  if (hit) return hit;
+
+  // A browser-like request; USGS 500s on some automated patterns.
+  const res = await fetch(upstream, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (declass-map image proxy)',
+      'Accept': 'image/jpeg,image/*;q=0.8,*/*;q=0.5',
+      'Referer': `https://${BROWSE_HOST}/`,
+    },
+  });
+  if (!res.ok) {
+    return new Response('Upstream image error', { status: 502 });
+  }
+
+  const headers = new Headers();
+  headers.set('content-type', 'image/jpeg');
+  // These rarely change; cache hard so the edge and browser both keep them.
+  headers.set('cache-control', 'public, max-age=604800, immutable');
+  headers.set('access-control-allow-origin', 'https://declass-map.spacefromspace.com');
+
+  const out = new Response(res.body, { status: 200, headers });
+  // Populate the edge cache without blocking the response.
+  ctx.waitUntil(cache.put(cacheKey, out.clone()));
+  return out;
+}
+
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
+
+    if (url.pathname.startsWith('/img/')) {
+      if (request.method !== 'GET' && request.method !== 'HEAD') {
+        return new Response('Method not allowed', { status: 405 });
+      }
+      return proxyBrowse(request, url, ctx);
+    }
 
     if (!url.pathname.startsWith('/data/')) {
       return env.ASSETS.fetch(request);
@@ -79,10 +150,10 @@ export default {
     }
 
     const key = url.pathname.slice('/data/'.length);
-    if (!SERVABLE.has(key)) {
+    const contentType = contentTypeFor(key);
+    if (!contentType) {
       return new Response('Not found', { status: 404 });
     }
-    const contentType = SERVABLE.get(key);
 
     // Direct navigation and same-origin requests send no Origin header, so
     // absence is fine; a *foreign* Origin is what we turn away.

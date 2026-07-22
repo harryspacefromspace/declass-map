@@ -54,6 +54,9 @@
   .chip.on{color:var(--ink);border-color:#6c5ce7;background:#6c5ce71a}
   .chip.on .n{color:#a99bf5}
   .mis-note{color:#5c6773;font-size:10px;margin-bottom:5px}
+  .frow{display:flex;gap:4px}
+  .frow .chip{flex:1;justify-content:center}
+  .fr-note{color:#5c6773;font-size:10px;margin-top:5px}
   .drow{display:flex;gap:5px;align-items:center}
   .drow input{flex:1;min-width:0;font-size:11px}
   /* year histogram — bars scale to the tallest year, log-ish so the 1960s
@@ -157,6 +160,16 @@
   <div class="lbl">Mission <span class="grp-act"><button class="mini" data-all="mis">All</button><button class="mini" data-none="mis">None</button></span></div>
   <div class="mis-note" id="f-mis-note">Follows the satellites selected above.</div>
   <div class="chips scroll" id="f-mis"></div>
+
+  <div class="lbl">Frame order <span id="fr-read" style="color:var(--dim);font-size:10px;text-transform:none;letter-spacing:0">all frames</span></div>
+  <div class="frow">
+    <button class="chip" data-fr="10">First 10%</button>
+    <button class="chip" data-fr="25">First 25%</button>
+    <button class="chip" data-fr="50">First half</button>
+    <button class="chip on" data-fr="100">All</button>
+  </div>
+  <div class="fr-note">Position through each mission, in flight order. Narrow to
+    the earliest frames — useful when a camera degraded mid-mission.</div>
 
   <div class="lbl">Recently available</div>
   <select id="f-recent">
@@ -325,6 +338,7 @@ function yearBounds(){
 // from loaded tiles instead would give a list that changes as you pan.
 let facets = null;
 const selSat = new Set(), selCam = new Set(), selMis = new Set();
+let frMax = 100;   // frame-order cutoff: keep fr <= frMax
 
 async function loadFacets(){
   try {
@@ -470,6 +484,11 @@ function applyFilter(){
       clauses.push(['in',['to-string',['get','mission']],['literal',[...selMis]]]);
   }
 
+  // Frame order: fr is 0-100, each feature's position through its mission,
+  // stamped at tile-build time. "First 25%" keeps fr <= 25.
+  if (frMax < 100)
+    clauses.push(['<=',['coalesce',['get','fr'],0],frMax]);
+
   // Both of these read properties that aren't on every feature. Comparing a
   // missing property directly throws ("Expected string but found null"), so
   // coalesce to a value that simply loses the comparison.
@@ -520,6 +539,17 @@ for (const id of ['f-scanned','f-unscanned','f-y-lo','f-y-hi','f-unpub','f-recen
                   'f-d-lo','f-d-hi'])
   el(id).addEventListener('input', applyFilter);
 
+// Frame-order buttons — single choice, so behave like radio buttons.
+for (const b of document.querySelectorAll('.frow .chip')) {
+  b.addEventListener('click', () => {
+    for (const o of document.querySelectorAll('.frow .chip')) o.classList.remove('on');
+    b.classList.add('on');
+    frMax = Number(b.dataset.fr);
+    el('fr-read').textContent = frMax < 100 ? `first ${frMax}%` : 'all frames';
+    applyFilter();
+  });
+}
+
 // All / None on the chip groups.
 for (const b of document.querySelectorAll('.mini')) {
   b.addEventListener('click', () => {
@@ -561,6 +591,9 @@ el('f-reset').addEventListener('click', () => {
   el('f-recent').value = '0';
   el('f-y-lo').value = YMIN; el('f-y-hi').value = YMAX;
   el('f-d-lo').value = ''; el('f-d-hi').value = '';
+  frMax = 100; el('fr-read').textContent = 'all frames';
+  for (const o of document.querySelectorAll('.frow .chip'))
+    o.classList.toggle('on', o.dataset.fr === '100');
   selMis.clear();
   if (facets) {
     selSat.clear(); for (const s of facets.satellites) selSat.add(s.name);
@@ -611,7 +644,7 @@ function report(){
                  || Number(el('f-y-lo').value) > YMIN || Number(el('f-y-hi').value) < YMAX
                  || (facets && (selSat.size < facets.satellites.length
                              || selCam.size < facets.cameras.length))
-                 || selMis.size > 0;
+                 || selMis.size > 0 || frMax < 100;
     el('counter').innerHTML = '<b>' + total.toLocaleString() + '</b> scenes in <b>'
       + cells.length + '</b> groups · zoom in for footprints'
       + (partial ? ' <span style="color:#8b98a9">(grouped counts ignore filters)</span>' : '');

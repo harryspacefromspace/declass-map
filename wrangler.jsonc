@@ -21,7 +21,7 @@
     "not_found_handling": "none",
     // Everything else is served straight from assets without waking the Worker;
     // only /data/* needs it.
-    "run_worker_first": ["/data/*"]
+    "run_worker_first": ["/data/*", "/img/*"]
   },
 
   // Scene data lives in a private bucket with no public access and no custom

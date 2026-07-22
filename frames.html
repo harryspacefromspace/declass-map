@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Frame browser — declassified imagery</title>
+<style>
+  :root{--bg:#0b0e13;--panel:#11161e;--edge:#2a3441;--ink:#e6edf3;--dim:#8b98a9;
+        --hi:#f0b429;--un:#a78bfa;--chip:#1a2029}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);
+            font:13px/1.45 ui-sans-serif,system-ui,-apple-system,sans-serif;overflow:hidden}
+  #app{display:flex;flex-direction:column;height:100%}
+
+  /* top bar */
+  #bar{display:flex;gap:8px;align-items:center;padding:9px 12px;flex-wrap:wrap;
+       border-bottom:1px solid var(--edge);background:#0d1118}
+  #brand{font-weight:600;white-space:nowrap}
+  #brand span{color:var(--dim);font-weight:400;margin-left:7px;font-size:11.5px}
+  .ctl{background:var(--chip);border:1px solid var(--edge);color:var(--ink);
+       border-radius:8px;padding:6px 10px;font:inherit;font-size:12.5px;cursor:pointer}
+  .ctl:hover{border-color:#3d4b5c}
+  .ctl:disabled{opacity:.4;cursor:default}
+  #eid{flex:1;min-width:230px;max-width:340px;cursor:text;
+       font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .spacer{flex:1}
+  a.ctl{text-decoration:none;display:inline-block}
+
+  /* main split */
+  #main{flex:1;display:flex;min-height:0}
+  #stage{flex:1;display:flex;flex-direction:column;min-width:0;background:#080b0f}
+  #stage-top{flex:1;position:relative;min-height:0;display:flex;align-items:center;
+             justify-content:center;overflow:hidden}
+  #shot{max-width:100%;max-height:100%;object-fit:contain;display:none}
+  #shot.show{display:block}
+  #shot-msg{position:absolute;color:var(--dim);font-size:13px;text-align:center;padding:20px}
+  #meta{border-top:1px solid var(--edge);padding:10px 14px;background:#0d1118;
+        display:flex;gap:18px;flex-wrap:wrap;align-items:center}
+  #meta .k{color:var(--dim);font-size:10.5px;text-transform:uppercase;letter-spacing:.06em}
+  #meta .v{font-size:12.5px;margin-top:1px}
+  #meta .v.id{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--hi)}
+
+  /* filmstrip */
+  #strip{height:96px;border-top:1px solid var(--edge);background:#0d1118;
+         display:flex;gap:5px;overflow-x:auto;overflow-y:hidden;padding:8px 10px;
+         scrollbar-width:thin}
+  /* No thumbnails here: USGS only offers a 65px-wide thumbnail, and these
+     frames are ~16:1 panoramic, so it comes back 65x4 — a sliver. The only
+     real preview is the browse image at ~5MB, far too heavy to tile. So the
+     rail carries the information instead. */
+  .cell{flex:0 0 auto;width:92px;height:78px;border:1px solid var(--edge);border-radius:5px;
+        background:#0b0e13;cursor:pointer;position:relative;overflow:hidden;
+        display:flex;flex-direction:column;justify-content:center;gap:3px;padding:6px 7px}
+  .cell:hover{border-color:#3d4b5c;background:#141a23}
+  .cell.on{border-color:var(--hi);background:#f0b4290f}
+  .cell .n{font-size:14px;font-variant-numeric:tabular-nums;color:var(--ink)}
+  .cell.on .n{color:var(--hi)}
+  .cell .d{font-size:9.5px;color:var(--dim)}
+  .cell .c{font-size:9px;color:#5c6773;
+           font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+           white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .cell.un{border-style:dashed}
+  .cell.un .n{color:var(--un)}
+
+  /* side list */
+  #side{width:290px;border-left:1px solid var(--edge);background:#0d1118;
+        display:flex;flex-direction:column;min-height:0}
+  #side h2{margin:0;padding:11px 14px;font-size:12px;font-weight:600;
+           border-bottom:1px solid var(--edge)}
+  #side h2 small{display:block;color:var(--dim);font-weight:400;font-size:11px;margin-top:2px}
+  #jump{padding:9px 14px;border-bottom:1px solid var(--edge);display:flex;gap:6px}
+  #jump input{flex:1;min-width:0}
+  #list{overflow-y:auto;flex:1}
+  .row{padding:7px 14px;border-bottom:1px solid #161c25;cursor:pointer;display:flex;gap:8px}
+  .row:hover{background:#141a23}
+  .row.on{background:#1a2130}
+  .row .i{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;flex:1;
+          overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .row .p{color:var(--dim);font-size:10.5px;font-variant-numeric:tabular-nums}
+  .row.un .i{color:var(--un)}
+  #toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);z-index:9;
+         background:#1f2937;border:1px solid var(--edge);border-radius:8px;padding:8px 14px;
+         font-size:12px;display:none}
+  kbd{background:#1a2029;border:1px solid var(--edge);border-radius:3px;padding:0 4px;
+      font-size:10.5px;font-family:inherit;color:var(--dim)}
+</style>
+</head>
+<body>
+<div id="app">
+
+<div id="bar">
+  <div id="brand">Frame browser <span>flight order</span></div>
+  <input class="ctl" id="eid" placeholder="Entity ID, e.g. D3C1214-300989A017" autocomplete="off" spellcheck="false">
+  <button class="ctl" id="go">Open</button>
+  <button class="ctl" id="prev" disabled>← Prev</button>
+  <button class="ctl" id="next" disabled>Next →</button>
+  <div class="spacer"></div>
+  <span style="color:var(--dim);font-size:11px">
+    <kbd>←</kbd> <kbd>→</kbd> to step</span>
+  <a class="ctl" id="ee" target="_blank" rel="noopener">EarthExplorer ↗</a>
+  <a class="ctl" id="onmap" target="_blank" rel="noopener">Show on map ↗</a>
+</div>
+
+<div id="main">
+  <div id="stage">
+    <div id="stage-top">
+      <div id="shot-msg">Enter an entity ID to start.</div>
+      <img id="shot" alt="">
+    </div>
+    <div id="meta"></div>
+    <div id="strip"></div>
+  </div>
+
+  <aside id="side">
+    <h2 id="side-title">No mission loaded<small id="side-sub">—</small></h2>
+    <div id="jump">
+      <input class="ctl" id="jump-n" type="number" min="1" placeholder="frame #">
+      <button class="ctl" id="jump-go">Go</button>
+    </div>
+    <div id="list"></div>
+  </aside>
+</div>
+
+</div>
+<div id="toast"></div>
+
+<script>
+const el = id => document.getElementById(id);
+const EE_IDS = {corona2:'5e839febdccb64b3', declassii:'5e839ff7d71d4811',
+                declassiii:'5e7c41f3ffaaf662'};
+
+// The mission is parsed out of the entity ID rather than looked up: it agrees
+// with the archive's own mission field on all 213,952 frames, which means the
+// browser can fetch one mission file directly instead of loading a 30MB index
+// just to find out where to look.
+const MISSION_PATS = [
+  [/^D3C(\d{4})-/,     m => ['declassiii', m[1]]],
+  [/^DZ[BC](\d{4})-/,  m => ['declassii',  m[1]]],
+  [/^DZ[BC](\d{6})/,   m => ['declassii',  String(parseInt(m[1], 10))]],
+  [/^DS(\d{4})-/,      m => ['corona2',    m[1]]],
+  [/^DS(\d{5})A/,      m => ['corona2',    String(parseInt(m[1], 10)) + 'A']],
+  [/^DS(\d{6})/,       m => ['corona2',    String(parseInt(m[1], 10))]],
+];
+function missionOf(entityId){
+  const s = (entityId || '').trim().toUpperCase();
+  for (const [rx, fn] of MISSION_PATS){
+    const m = s.match(rx);
+    if (m) return fn(m);
+  }
+  return null;
+}
+
+let cur = null;      // {mission, dataset, satellite, browsePrefix, frames:[...]}
+let pos = -1;        // index into cur.frames
+const cache = new Map();
+
+// Browse images go through our own /img/ proxy, not straight to USGS. USGS
+// sends them with nosniff and no CORS and 500s on some cross-origin patterns,
+// so Chromium's ORB refuses to paint a direct <img>. The proxy re-serves them
+// same-origin (and caches them at our edge). browsePrefix is the full USGS
+// URL; keep only the path after the host.
+const PROXY = '/img/';
+const browseUrl = tail => {
+  const p = (cur.browsePrefix + tail).replace(/^https?:\/\/[^/]+\//, '');
+  return PROXY + p;
+};
+
+const F = {ID:0, DATE:1, BROWSE:2, CAM:3, SCANNED:4, LON:5, LAT:6};
+
+function toast(msg){
+  const t = el('toast'); t.textContent = msg; t.style.display = 'block';
+  clearTimeout(toast._t); toast._t = setTimeout(() => t.style.display = 'none', 2600);
+}
+
+async function loadMission(dataset, mission){
+  const key = dataset + '_' + mission;
+  if (cache.has(key)) return cache.get(key);
+  const r = await fetch(`/data/frames/${key}.json`);
+  if (!r.ok) throw new Error(`mission ${mission} not found (${r.status})`);
+  const doc = await r.json();
+  cache.set(key, doc);
+  return doc;
+}
+
+async function open(entityId, quiet){
+  const parsed = missionOf(entityId);
+  if (!parsed){ toast('That does not look like a declassified entity ID.'); return; }
+  const [dataset, mission] = parsed;
+  const want = (entityId || '').trim().toUpperCase();
+
+  try {
+    if (!cur || cur.dataset !== dataset || cur.mission !== mission){
+      el('shot-msg').textContent = `Loading mission ${mission}…`;
+      cur = await loadMission(dataset, mission);
+      renderList();
+    }
+  } catch (e){ toast(String(e.message || e)); return; }
+
+  const i = cur.frames.findIndex(f => f[F.ID].toUpperCase() === want);
+  if (i < 0){
+    toast(`${want} is not in mission ${mission}.`);
+    if (!quiet) show(0);
+    return;
+  }
+  show(i);
+}
+
+function show(i){
+  show._seq = show._seq || 0;
+  if (!cur || i < 0 || i >= cur.frames.length) return;
+  pos = i;
+  const f = cur.frames[i];
+  const img = el('shot'), msg = el('shot-msg');
+  img.classList.remove('show');
+  msg.style.display = 'block';
+
+  if (f[F.BROWSE]){
+    const seq = ++show._seq;
+    msg.textContent = 'Loading browse image…';
+    const full = new Image();
+    full.onload = () => {
+      if (seq !== show._seq) return;      // stepped away before it arrived
+      img.src = full.src; img.classList.add('show'); msg.style.display = 'none';
+      prefetch(pos + 1); prefetch(pos - 1);
+    };
+    full.onerror = () => {
+      if (seq !== show._seq) return;
+      msg.textContent = 'Browse image unavailable (USGS may be down).';
+    };
+    full.src = browseUrl(f[F.BROWSE]);
+  } else {
+    img.removeAttribute('src');
+    msg.textContent = 'No browse image for this frame.';
+  }
+
+  el('eid').value = f[F.ID];
+  el('meta').innerHTML = [
+    ['Entity ID', `<span class="v id">${f[F.ID]}</span>`],
+    ['Position', `<span class="v">${(i+1).toLocaleString()} of ${cur.frames.length.toLocaleString()}</span>`],
+    ['Acquired', `<span class="v">${f[F.DATE] || '—'}</span>`],
+    ['Satellite', `<span class="v">${cur.satellite}</span>`],
+    ['Mission', `<span class="v">${cur.mission}</span>`],
+    ['Camera', `<span class="v">${f[F.CAM] || '—'}</span>`],
+    ['Scanned', `<span class="v">${f[F.SCANNED] ? 'yes' : 'not scanned'}</span>`],
+  ].map(([k, v]) => `<div><div class="k">${k}</div>${v}</div>`).join('');
+
+  el('ee').href = `https://earthexplorer.usgs.gov/scene/metadata/full/${
+    EE_IDS[cur.dataset] || cur.dataset}/${f[F.ID]}/`;
+  const mapHref = (f[F.LAT] != null)
+    ? `/tiles.html#map=9/${f[F.LAT]}/${f[F.LON]}` : '/tiles.html';
+  el('onmap').href = mapHref;
+
+  el('prev').disabled = i <= 0;
+  el('next').disabled = i >= cur.frames.length - 1;
+
+  markActive();
+  buildStrip();
+  history.replaceState(null, '', '#' + f[F.ID]);
+}
+
+function step(d){ if (cur && pos >= 0) show(Math.min(cur.frames.length - 1, Math.max(0, pos + d))); }
+
+// Warm the neighbours so ← and → land instantly. Only ever one either side:
+// these are ~5MB each, so reading further ahead would pull tens of MB for
+// frames that may never be looked at.
+const warmed = new Set();
+function prefetch(i){
+  if (!cur || i < 0 || i >= cur.frames.length) return;
+  const tail = cur.frames[i][F.BROWSE];
+  if (!tail || warmed.has(tail)) return;
+  warmed.add(tail);
+  const im = new Image();
+  im.decoding = 'async';
+  im.src = browseUrl(tail);
+}
+
+// Filmstrip shows a window around the current frame — rendering 20,000 thumbs
+// would fetch 20,000 images from USGS.
+const WIN = 12;
+function buildStrip(){
+  const strip = el('strip');
+  const lo = Math.max(0, pos - WIN), hi = Math.min(cur.frames.length, pos + WIN + 1);
+  strip.innerHTML = '';
+  for (let i = lo; i < hi; i++){
+    const f = cur.frames[i];
+    const c = document.createElement('div');
+    c.className = 'cell' + (i === pos ? ' on' : '') + (f[F.SCANNED] ? '' : ' un');
+    c.title = `${f[F.ID]} · ${f[F.DATE]}`;
+    c.innerHTML = `<div class="n">${i + 1}</div>` +
+      `<div class="d">${(f[F.DATE] || '').slice(5)}</div>` +
+      `<div class="c">${f[F.CAM] || ''}</div>`;
+    c.addEventListener('click', () => show(i));
+    strip.appendChild(c);
+  }
+  const active = strip.querySelector('.cell.on');
+  if (active) active.scrollIntoView({block:'nearest', inline:'center'});
+}
+
+function renderList(){
+  el('side-title').innerHTML = `Mission ${cur.mission}` +
+    `<small id="side-sub">${cur.satellite} · ${cur.frames.length.toLocaleString()} frames · ` +
+    `${cur.frames[0][F.DATE]} → ${cur.frames[cur.frames.length-1][F.DATE]}</small>`;
+  el('jump-n').max = cur.frames.length;
+
+  // Built as one string: 20,000 appendChild calls locked the page for seconds.
+  const list = el('list');
+  list.innerHTML = cur.frames.map((f, i) =>
+    `<div class="row${f[F.SCANNED] ? '' : ' un'}" data-i="${i}">` +
+    `<span class="i">${f[F.ID]}</span><span class="p">${i + 1}</span></div>`).join('');
+  list.onclick = e => {
+    const row = e.target.closest('.row');
+    if (row) show(Number(row.dataset.i));
+  };
+}
+
+function markActive(){
+  const list = el('list');
+  const was = list.querySelector('.row.on');
+  if (was) was.classList.remove('on');
+  const now = list.querySelector(`.row[data-i="${pos}"]`);
+  if (now){ now.classList.add('on'); now.scrollIntoView({block:'nearest'}); }
+}
+
+el('go').addEventListener('click', () => open(el('eid').value));
+el('eid').addEventListener('keydown', e => { if (e.key === 'Enter') open(el('eid').value); });
+el('prev').addEventListener('click', () => step(-1));
+el('next').addEventListener('click', () => step(1));
+el('jump-go').addEventListener('click', () => {
+  const n = Number(el('jump-n').value);
+  if (cur && n >= 1 && n <= cur.frames.length) show(n - 1);
+});
+el('jump-n').addEventListener('keydown', e => { if (e.key === 'Enter') el('jump-go').click(); });
+
+document.addEventListener('keydown', e => {
+  // Not while typing in the ID box, or arrow keys would move the caret AND the frame.
+  if (e.target.tagName === 'INPUT') return;
+  if (e.key === 'ArrowLeft'){ e.preventDefault(); step(-1); }
+  if (e.key === 'ArrowRight'){ e.preventDefault(); step(1); }
+  if (e.key === 'Home' && cur) show(0);
+  if (e.key === 'End' && cur) show(cur.frames.length - 1);
+});
+
+// Deep link: /frames.html#D3C1214-300989A017
+const initial = decodeURIComponent(location.hash.slice(1));
+if (initial) { el('eid').value = initial; open(initial); }
+</script>
+</body>
+</html>

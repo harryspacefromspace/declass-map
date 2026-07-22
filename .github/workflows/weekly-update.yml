@@ -132,6 +132,27 @@ jobs:
       - name: Step 4d — Rebuild the compact scene index
         run: python make_scene_index.py available_scenes.geojson scene-index.json.gz
 
+      # Per-mission frame files in flight order, for the frame browser. It can't
+      # ask the tiles for a mission's neighbours — a tile holds only what is on
+      # screen — so the whole archive is ordered here, one file per mission.
+      - name: Step 4f — Rebuild the frame-browser index
+        run: |
+          python make_frames_index.py available_scenes.geojson frames
+          # --delete so a mission that disappears upstream is removed from R2.
+          # These are all .json; the Worker sets the content-type when serving,
+          # so it doesn't matter what S3 stores them as.
+          aws s3 sync frames "s3://${R2_BUCKET}/frames" \
+            --endpoint-url "https://${CF_ACCOUNT_ID}.r2.cloudflarestorage.com" \
+            --delete
+        env:
+          R2_BUCKET: declass-map-data
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+
       # The tile map builds its filter chips from these. It can't count its own
       # options the way the GeoJSON map did — it only ever holds the tiles in
       # view, so a list derived from those changes as you pan.
@@ -196,6 +217,10 @@ jobs:
         if: ${{ inputs.build_tiles != false }}
         run: |
           test -s available_scenes.geojson || { echo "no scene data to tile"; exit 1; }
+          # Rank each frame within its mission (adds `fr` 0-100) before tiling,
+          # so the map's frame-order filter has something to compare — tiles
+          # can't derive it, they hold only what is on screen.
+          python annotate_frame_order.py available_scenes.geojson available_scenes.geojson
           python make_centroids.py available_scenes.geojson centroids.geojson
 
           # Footprints, z5-8. Stopping at 8 is fine: these are quadrilaterals, so
