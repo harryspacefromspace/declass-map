@@ -3076,11 +3076,49 @@ const CW_AIRBASES = [
   {{n:"Lask AB (Poland)",                   lat:51.5517, lon:19.1808,   k:"airbases"}},
 ];
 
-// OurAirports CSV URL — fetched once, parsed client-side, filtered to military
-const OURAIRPORTS_URL = 'https://davidmegginson.github.io/ourairports-data/airports.csv';
+// Overlay sites, built from OpenStreetMap at publish time (fetch_overlays.py)
+// and served from R2 next to the scene data.
+//
+// This used to pull the OurAirports CSV and keep rows where type == 'military'.
+// That column only ever holds small_airport / medium_airport / large_airport /
+// heliport / seaplane_base / balloonport / closed — 'military' is not one of
+// them — so the filter matched nothing, and the map downloaded 12.7MB on every
+// toggle to render zero extra markers. OSM tags these properly.
+const OVERLAY_URL = '/data/overlays.geojson';
 
 const ovLayers = {{}};
-let ourairportsCache = null;
+let overlayCache = null;      // {{airbases:[...], silos:[...]}} once loaded
+let overlayPromise = null;    // in-flight fetch, so two clicks share one request
+
+function loadOverlayData() {{
+  if (overlayCache) return Promise.resolve(overlayCache);
+  if (overlayPromise) return overlayPromise;
+
+  overlayPromise = fetch(OVERLAY_URL)
+    .then(r => {{
+      if (!r.ok) throw new Error('overlays ' + r.status);
+      return r.json();
+    }})
+    .then(gj => {{
+      const byKind = {{airbases: [], silos: []}};
+      for (const f of gj.features || []) {{
+        const k = f.properties && f.properties.k;
+        const c = f.geometry && f.geometry.coordinates;
+        if (!byKind[k] || !c) continue;
+        byKind[k].push({{n: f.properties.n, lat: c[1], lon: c[0], k}});
+      }}
+      overlayCache = byKind;
+      return byKind;
+    }})
+    .catch(e => {{
+      // Not fatal: the curated Cold War lists below still render.
+      console.warn('overlay data unavailable, using curated sites only:', e);
+      overlayPromise = null;
+      return null;
+    }});
+
+  return overlayPromise;
+}}
 
 function ovMarker(lat, lon, name, key) {{
   const colors = {{silos:'#ff4d4d', airbases:'#4d9fff'}};
@@ -3093,29 +3131,17 @@ function ovMarker(lat, lon, name, key) {{
   );
 }}
 
-// Parse the OurAirports CSV (only grab the columns we need)
-function parseOurAirportsCSV(text) {{
-  const lines = text.split('\\n');
-  const header = lines[0].split(',').map(h => h.replace(/"/g,'').trim());
-  const iName = header.indexOf('name');
-  const iLat  = header.indexOf('latitude_deg');
-  const iLon  = header.indexOf('longitude_deg');
-  const iType = header.indexOf('type');
-  const results = [];
-  for (let i = 1; i < lines.length; i++) {{
-    // Simple CSV parse — handles quoted fields
-    const row = lines[i].match(/(".*?"|[^,]+|(?<=,)(?=,)|(?<=,)$|^(?=,))/g);
-    if (!row) continue;
-    const clean = row.map(v => v.replace(/^"|"$/g,'').trim());
-    if (clean[iType] === 'military' && clean[iLat] && clean[iLon]) {{
-      const lat = parseFloat(clean[iLat]);
-      const lon = parseFloat(clean[iLon]);
-      if (!isNaN(lat) && !isNaN(lon)) {{
-        results.push({{n: clean[iName] || 'Military Airport', lat, lon, k:'airbases'}});
-      }}
-    }}
+// Merge OSM sites over the curated Cold War list, dropping anything within
+// ~5km of a curated site so a base doesn't get two markers under two names.
+function mergeSites(curated, fetched) {{
+  if (!fetched || !fetched.length) return curated.slice();
+  const merged = curated.slice();
+  for (const site of fetched) {{
+    const dupe = curated.some(c =>
+      Math.abs(c.lat - site.lat) < 0.05 && Math.abs(c.lon - site.lon) < 0.05);
+    if (!dupe) merged.push(site);
   }}
-  return results;
+  return merged;
 }}
 
 async function toggleOverlay(key) {{
@@ -3133,46 +3159,14 @@ async function toggleOverlay(key) {{
   if (btn) {{ btn.disabled = true; btn.style.opacity = '0.5'; }}
 
   try {{
-    let points = [];
-
-    if (key === 'silos') {{
-      points = CW_SILOS;
-
-    }} else if (key === 'airbases') {{
-      // Start with hardcoded Cold War bases immediately
-      points = [...CW_AIRBASES];
-
-      // Then fetch OurAirports for comprehensive global military airports
-      if (!ourairportsCache) {{
-        try {{
-          const resp = await fetch(OURAIRPORTS_URL);
-          if (resp.ok) {{
-            const text = await resp.text();
-            ourairportsCache = parseOurAirportsCSV(text);
-          }}
-        }} catch(e) {{
-          console.warn('OurAirports fetch failed, using hardcoded only:', e);
-        }}
-      }}
-      if (ourairportsCache) {{
-        // Merge: deduplicate by proximity (skip if within 5km of a hardcoded site)
-        const merged = [...CW_AIRBASES];
-        for (const ap of ourairportsCache) {{
-          const tooClose = CW_AIRBASES.some(cw =>
-            Math.abs(cw.lat - ap.lat) < 0.05 && Math.abs(cw.lon - ap.lon) < 0.05
-          );
-          if (!tooClose) merged.push(ap);
-        }}
-        points = merged;
-      }}
-    }}
+    const curated = key === 'silos' ? CW_SILOS : CW_AIRBASES;
+    const data = await loadOverlayData();
+    const points = mergeSites(curated, data && data[key]);
 
     const layer = L.layerGroup(points.map(p => ovMarker(p.lat, p.lon, p.n, key)));
     layer.addTo(map);
     ovLayers[key] = layer;
     btn?.classList.add('on');
-    const badge = document.getElementById(`badge-${{key}}`);
-    if (badge) badge.textContent = points.length;
     updateOvToggle();
 
   }} catch(e) {{
@@ -3182,10 +3176,24 @@ async function toggleOverlay(key) {{
   if (btn) {{
     btn.disabled = false;
     btn.style.opacity = '';
+  }}
+  refreshOvBadges();
+}}
+
+// Show how many sites each layer holds before it's switched on — an empty
+// badge just reads as a broken button.
+function refreshOvBadges() {{
+  for (const key of ['airbases', 'silos']) {{
+    const badge = document.getElementById(`badge-${{key}}`);
+    if (!badge) continue;
     if (ovLayers[key]) {{
-      const badge = document.getElementById(`badge-${{key}}`);
-      if (badge) badge.textContent = ovLayers[key].getLayers().length;
+      badge.textContent = ovLayers[key].getLayers().length.toLocaleString();
+      continue;
     }}
+    const curated = key === 'silos' ? CW_SILOS : CW_AIRBASES;
+    badge.textContent = overlayCache
+      ? mergeSites(curated, overlayCache[key]).length.toLocaleString()
+      : '·';
   }}
 }}
 
@@ -3217,6 +3225,13 @@ document.getElementById('ov-toggle').addEventListener('click', () => {{
   const tog   = document.getElementById('ov-toggle');
   panel.classList.toggle('open');
   tog.classList.toggle('open');
+  // Opening the panel is a good signal the overlays are about to be used —
+  // fetch the site list now so the counts are there and the first toggle is
+  // instant.
+  if (panel.classList.contains('open')) {{
+    refreshOvBadges();
+    loadOverlayData().then(refreshOvBadges);
+  }}
 }});
 document.querySelectorAll('.ov-btn').forEach(btn =>
   btn.addEventListener('click', () => toggleOverlay(btn.dataset.ov))

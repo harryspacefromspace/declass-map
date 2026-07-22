@@ -125,6 +125,29 @@ jobs:
           AWS_REQUEST_CHECKSUM_CALCULATION: when_required
           AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
 
+      # Overlay sites come from OSM via Overpass, which rate-limits and times
+      # out under load. A failure here must not fail the run or blank the
+      # overlays, so on error we keep whatever is already published in R2.
+      - name: Step 4b — Refresh overlay sites from OpenStreetMap
+        continue-on-error: true
+        run: python fetch_overlays.py overlays.geojson
+
+      - name: Step 4c — Upload overlay sites to R2
+        if: ${{ hashFiles('overlays.geojson') != '' }}
+        run: |
+          aws s3 cp overlays.geojson "s3://${R2_BUCKET}/overlays.geojson" \
+            --endpoint-url "https://${CF_ACCOUNT_ID}.r2.cloudflarestorage.com" \
+            --content-type "application/json"
+          echo "uploaded $(du -h overlays.geojson | cut -f1) of overlay sites"
+        env:
+          R2_BUCKET: declass-map-data
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+
       # The map can't load a 111MB GeoJSON — the browser gives out somewhere
       # between 108k and 214k features. Vector tiles fix that by transferring
       # only the tiles in view (~175KB to open the map), so the archive can keep

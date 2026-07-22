@@ -7,6 +7,7 @@ available_scenes.geojson
 scenes.geojson
 working_scenes.geojson
 centroids.geojson
+overlays.geojson
 
 # Vector tile build artefacts — rebuilt from the scene data, published to R2.
 *.mbtiles

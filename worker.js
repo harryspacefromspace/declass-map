@@ -24,6 +24,8 @@ const ALLOWED_ORIGINS = new Set([
 const SERVABLE = new Map([
   ['scenes.geojson', 'application/json; charset=utf-8'],
   ['scenes.pmtiles', 'application/octet-stream'],
+  // Military airbases and missile sites from OSM, for the overlays panel.
+  ['overlays.geojson', 'application/json; charset=utf-8'],
 ]);
 
 // PMTiles works by reading a few byte ranges out of a large archive: the header
