@@ -121,8 +121,21 @@
   <div class="row"><span class="sw" style="background:#8b5cf6"></span>
     <label for="f-unscanned">Not scanned</label><input type="checkbox" id="f-unscanned" checked></div>
 
+  <div class="row"><span class="sw" style="background:#3f4b5b"></span>
+    <label for="f-unpub">Hide published</label><input type="checkbox" id="f-unpub"></div>
+
   <div class="lbl">Satellite</div>
   <select id="f-sat"><option value="">All</option></select>
+
+  <div class="lbl">Recently available</div>
+  <select id="f-recent">
+    <option value="0">Any time</option>
+    <option value="1">Last 24 hours</option>
+    <option value="7">Last 7 days</option>
+    <option value="30">Last 30 days</option>
+    <option value="90">Last 90 days</option>
+    <option value="365">Last year</option>
+  </select>
 
   <div class="lbl">Acquired</div>
   <div class="yr"><b id="y-lo">1959</b><span style="color:var(--dim)">to</span><b id="y-hi">1984</b></div>
@@ -237,7 +250,16 @@ const map = new maplibregl.Map({
     ],
   },
 });
-map.addControl(new maplibregl.NavigationControl({visualizePitch:false}), 'bottom-right');
+// North stays up. Footprints are read against coastlines and borders, and a
+// nudged bearing makes that harder for no benefit — so every rotation and
+// pitch gesture is off, not just the drag.
+map.dragRotate.disable();
+map.touchZoomRotate.disableRotation();
+map.keyboard.disableRotation();
+map.setMaxPitch(0);
+
+map.addControl(new maplibregl.NavigationControl(
+  {visualizePitch:false, showCompass:false}), 'bottom-right');
 map.addControl(new maplibregl.ScaleControl({unit:'metric'}), 'bottom-right');
 
 // ── basemaps ────────────────────────────────────────────────────────────────
@@ -271,6 +293,18 @@ function applyFilter(){
   else if (!scanned && unscanned)  clauses.push(['==',['get','scanned'],false]);
   else if (!scanned && !unscanned) clauses.push(['==',['get','scanned'],'__none__']);
   if (sat) clauses.push(['==',['get','satellite'],sat]);
+
+  // Both of these read properties that aren't on every feature. Comparing a
+  // missing property directly throws ("Expected string but found null"), so
+  // coalesce to a value that simply loses the comparison.
+  if (el('f-unpub').checked)
+    clauses.push(['!=',['coalesce',['get','published'],false],true]);
+
+  const days = Number(el('f-recent').value);
+  if (days > 0){
+    const cut = new Date(Date.now() - days * 864e5).toISOString().slice(0,10);
+    clauses.push(['>=',['coalesce',['get','firstSeenAvailable'],''],cut]);
+  }
   if (lo > YMIN || hi < YMAX){
     // acquisitionDate is "YYYY-MM-DD …" — comparing the year substring avoids
     // parsing a date per feature per frame.
@@ -299,12 +333,14 @@ function applyFilter(){
   }
   report();
 }
-for (const id of ['f-scanned','f-unscanned','f-sat','f-y-lo','f-y-hi'])
+for (const id of ['f-scanned','f-unscanned','f-sat','f-y-lo','f-y-hi','f-unpub','f-recent'])
   el(id).addEventListener('input', applyFilter);
 
 el('f-reset').addEventListener('click', () => {
   el('f-scanned').checked = el('f-unscanned').checked = true;
   el('f-sat').value = '';
+  el('f-unpub').checked = false;
+  el('f-recent').value = '0';
   el('f-y-lo').value = YMIN; el('f-y-hi').value = YMAX;
   applyFilter();
 });
@@ -357,8 +393,12 @@ function report(){
     const field = el('f-scanned').checked && el('f-unscanned').checked ? 'n'
                 : el('f-scanned').checked ? 'ns' : el('f-unscanned').checked ? 'nu' : null;
     const total = field ? cells.reduce((s,c) => s + (c.properties[field]||0), 0) : 0;
+    const partial = el('f-sat').value || el('f-unpub').checked
+                 || el('f-recent').value !== '0'
+                 || Number(el('f-y-lo').value) > YMIN || Number(el('f-y-hi').value) < YMAX;
     el('counter').innerHTML = '<b>' + total.toLocaleString() + '</b> scenes in <b>'
-      + cells.length + '</b> groups · zoom in for footprints';
+      + cells.length + '</b> groups · zoom in for footprints'
+      + (partial ? ' <span style="color:#8b98a9">(grouped counts ignore filters)</span>' : '');
   } else {
     const n = rendered().length;
     el('counter').innerHTML = '<b>' + n.toLocaleString() + '</b> footprints on screen';
@@ -502,6 +542,10 @@ el('search').addEventListener('keydown', e => {
 
 // ── lifecycle ───────────────────────────────────────────────────────────────
 map.on('load', () => {
+  // hash:true will restore a bearing/pitch baked into a shared URL, which the
+  // disabled gestures would then leave no way to undo.
+  if (map.getBearing() !== 0) map.setBearing(0);
+  if (map.getPitch() !== 0) map.setPitch(0);
   firstPaint = Math.round(performance.now() - t0);
   el('brand-sub').textContent = 'footprint map · ' + firstPaint + ' ms';
   applyFilter(); fillSatellites(); report();
