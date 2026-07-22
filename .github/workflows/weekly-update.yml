@@ -175,8 +175,11 @@ jobs:
 
           # Footprints, z5-8. Stopping at 8 is fine: these are quadrilaterals, so
           # simplification keeps all four corners and the client overzooms them
-          # cleanly past that. displayId duplicates entityId and the browse URL
-          # is derivable — both would otherwise repeat in every tile they touch.
+          # cleanly past that. displayId is dropped because it is identical to
+          # entityId for all 213,952 features. browse is kept despite costing
+          # ~40MB: corona2 and declassiii URLs are a pure function of entityId,
+          # but declassii appends a frame counter that appears nowhere else, so
+          # a third of the archive could not be reconstructed client-side.
           # --drop-rate=1 disables tippecanoe's default thinning. Without it it
           # drops features at every zoom below maxzoom as a matter of course —
           # 4,580 footprints vanished at z5 on the first run — which is right for
@@ -184,7 +187,7 @@ jobs:
           # archive has and the map won't show. --drop-densest-as-needed stays as
           # the bounded fallback for tiles that would otherwise blow the limit.
           tippecanoe -o footprints.mbtiles -l scenes -Z5 -z8 \
-            -x displayId -x browse \
+            -x displayId \
             --no-tiny-polygon-reduction \
             --drop-rate=1 \
             --drop-densest-as-needed \
