@@ -132,6 +132,24 @@ jobs:
       - name: Step 4d — Rebuild the compact scene index
         run: python make_scene_index.py available_scenes.geojson scene-index.json.gz
 
+      # The tile map builds its filter chips from these. It can't count its own
+      # options the way the GeoJSON map did — it only ever holds the tiles in
+      # view, so a list derived from those changes as you pan.
+      - name: Step 4e — Rebuild filter facets
+        run: |
+          python make_facets.py available_scenes.geojson facets.json
+          aws s3 cp facets.json "s3://${R2_BUCKET}/facets.json" \
+            --endpoint-url "https://${CF_ACCOUNT_ID}.r2.cloudflarestorage.com" \
+            --content-type "application/json"
+        env:
+          R2_BUCKET: declass-map-data
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+
       # Overlay sites come from OSM via Overpass, which rate-limits and times
       # out under load. A failure here must not fail the run or blank the
       # overlays, so on error we keep whatever is already published in R2.

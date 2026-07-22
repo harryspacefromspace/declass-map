@@ -33,10 +33,34 @@
   .spacer{flex:1}
 
   /* filter panel */
-  #filters{position:absolute;top:52px;left:12px;z-index:6;width:232px;
+  #filters{position:absolute;top:52px;left:12px;z-index:6;width:262px;
            background:var(--panel);border:1px solid var(--edge);border-radius:10px;
-           padding:12px 14px;backdrop-filter:blur(8px);display:none}
+           padding:12px 14px;backdrop-filter:blur(8px);display:none;
+           /* the panel grew past the viewport once Camera and Mission landed */
+           max-height:calc(100vh - 84px);overflow-y:auto}
   #filters.open{display:block}
+  .lbl{display:flex;align-items:center;justify-content:space-between}
+  .grp-act{display:flex;gap:4px}
+  .mini{background:#0b0e13;border:1px solid var(--edge);color:var(--dim);
+        border-radius:4px;font:inherit;font-size:10px;padding:1px 5px;cursor:pointer;
+        text-transform:none;letter-spacing:0}
+  .mini:hover{color:var(--ink);border-color:#4a5568}
+  .chips{display:flex;flex-wrap:wrap;gap:4px}
+  .chips.scroll{max-height:132px;overflow-y:auto;align-content:flex-start}
+  .chip{background:#0b0e13;border:1px solid var(--edge);color:var(--dim);
+        border-radius:5px;font:inherit;font-size:11px;padding:3px 7px;cursor:pointer;
+        display:flex;gap:5px;align-items:center}
+  .chip .n{color:#5c6773;font-size:9.5px;font-variant-numeric:tabular-nums}
+  .chip.on{color:var(--ink);border-color:#6c5ce7;background:#6c5ce71a}
+  .chip.on .n{color:#a99bf5}
+  .mis-note{color:#5c6773;font-size:10px;margin-bottom:5px}
+  .drow{display:flex;gap:5px;align-items:center}
+  .drow input{flex:1;min-width:0;font-size:11px}
+  /* year histogram — bars scale to the tallest year, log-ish so the 1960s
+     don't flatten the 1980s into nothing */
+  #hist{display:flex;align-items:flex-end;gap:1px;height:34px;margin-bottom:6px}
+  #hist i{flex:1;background:#2f3947;border-radius:1px 1px 0 0;min-height:1px}
+  #hist i.on{background:#f0b429}
   .row{display:flex;align-items:center;gap:7px;margin:6px 0}
   .row label{flex:1;cursor:pointer}
   .sw{width:11px;height:11px;border-radius:2px;flex:none}
@@ -124,8 +148,15 @@
   <div class="row"><span class="sw" style="background:#3f4b5b"></span>
     <label for="f-unpub">Hide published</label><input type="checkbox" id="f-unpub"></div>
 
-  <div class="lbl">Satellite</div>
-  <select id="f-sat"><option value="">All</option></select>
+  <div class="lbl">Satellite <span class="grp-act"><button class="mini" data-all="sat">All</button><button class="mini" data-none="sat">None</button></span></div>
+  <div class="chips" id="f-sat"></div>
+
+  <div class="lbl">Camera <span class="grp-act"><button class="mini" data-all="cam">All</button><button class="mini" data-none="cam">None</button></span></div>
+  <div class="chips" id="f-cam"></div>
+
+  <div class="lbl">Mission <span class="grp-act"><button class="mini" data-all="mis">All</button><button class="mini" data-none="mis">None</button></span></div>
+  <div class="mis-note" id="f-mis-note">Follows the satellites selected above.</div>
+  <div class="chips scroll" id="f-mis"></div>
 
   <div class="lbl">Recently available</div>
   <select id="f-recent">
@@ -138,9 +169,17 @@
   </select>
 
   <div class="lbl">Acquired</div>
+  <div id="hist" title="Scenes per year"></div>
   <div class="yr"><b id="y-lo">1959</b><span style="color:var(--dim)">to</span><b id="y-hi">1984</b></div>
   <input type="range" id="f-y-lo" min="1959" max="1984" value="1959">
   <input type="range" id="f-y-hi" min="1959" max="1984" value="1984">
+
+  <div class="lbl">Exact dates</div>
+  <div class="drow">
+    <input type="date" class="ctl" id="f-d-lo">
+    <span style="color:var(--dim)">→</span>
+    <input type="date" class="ctl" id="f-d-hi">
+  </div>
 
   <hr>
   <button class="ctl" id="f-reset" style="width:100%">Reset filters</button>
@@ -282,17 +321,154 @@ function yearBounds(){
   return [lo, hi];
 }
 
+// Counts over the whole archive, published by make_facets.py. Deriving these
+// from loaded tiles instead would give a list that changes as you pan.
+let facets = null;
+const selSat = new Set(), selCam = new Set(), selMis = new Set();
+
+async function loadFacets(){
+  try {
+    const r = await fetch('/data/facets.json');
+    if (!r.ok) throw new Error('facets ' + r.status);
+    facets = await r.json();
+  } catch (e) {
+    console.warn('facets unavailable, filters fall back to unfiltered:', e);
+    return;
+  }
+  buildSatChips();
+  buildCamChips();
+  buildMissionChips();
+  buildHistogram();
+  if (facets.dateMin) {
+    for (const id of ['f-d-lo','f-d-hi']) {
+      el(id).min = facets.dateMin; el(id).max = facets.dateMax;
+    }
+  }
+  applyFilter();
+}
+
+const nfmt = n => n >= 1000 ? (n/1000).toFixed(n >= 10000 ? 0 : 1) + 'k' : String(n);
+
+function chip(label, count, on, onClick){
+  const b = document.createElement('button');
+  b.className = 'chip' + (on ? ' on' : '');
+  b.innerHTML = `<span>${label}</span><span class="n">${nfmt(count)}</span>`;
+  b.addEventListener('click', () => { onClick(b); });
+  return b;
+}
+
+function buildSatChips(){
+  const box = el('f-sat'); box.innerHTML = '';
+  for (const s of facets.satellites) {
+    selSat.add(s.name);
+    box.appendChild(chip(s.name, s.n, true, b => {
+      b.classList.toggle('on');
+      b.classList.contains('on') ? selSat.add(s.name) : selSat.delete(s.name);
+      buildMissionChips();     // mission list follows the satellite selection
+      applyFilter();
+    }));
+  }
+}
+
+const DS_LABEL = {corona2:'CORONA', declassii:'GAMBIT', declassiii:'HEXAGON'};
+
+function buildCamChips(){
+  const box = el('f-cam'); box.innerHTML = '';
+  for (const c of facets.cameras) {
+    const key = c.dataset + '|' + c.camera;
+    selCam.add(key);
+    // Camera names repeat across datasets (Aft exists for CORONA and HEXAGON),
+    // so the pair is the identity, not the name — and the label has to say
+    // which is which or you get two chips both reading "Aft".
+    const label = `<span style="color:#5c6773;font-size:9px">${
+      DS_LABEL[c.dataset] || c.dataset}</span> ${c.camera}`;
+    box.appendChild(chip(label, c.n, true, b => {
+      b.classList.toggle('on');
+      b.classList.contains('on') ? selCam.add(key) : selCam.delete(key);
+      applyFilter();
+    }));
+  }
+}
+
+function buildMissionChips(){
+  const box = el('f-mis'); box.innerHTML = '';
+  const shown = [];
+  for (const sat of Object.keys(facets.missions)) {
+    if (!selSat.has(sat)) continue;
+    for (const m of facets.missions[sat]) shown.push(m);
+  }
+  shown.sort((a, b) => a.m.localeCompare(b.m, undefined, {numeric: true}));
+  // Missions are opt-out like everything else: an empty selection means "all",
+  // so narrowing satellites doesn't silently exclude their missions.
+  for (const k of [...selMis])
+    if (k !== '__none__' && !shown.some(s => s.m === k)) selMis.delete(k);
+
+  el('f-mis-note').textContent = shown.length
+    ? `${shown.length} missions · click to narrow`
+    : 'No missions — select a satellite above.';
+
+  for (const m of shown) {
+    box.appendChild(chip(m.m, m.n, selMis.size === 0 || selMis.has(m.m), b => {
+      // First click on an all-on list means "only this one".
+      if (selMis.size === 0) { selMis.add(m.m); }
+      else if (selMis.has(m.m)) { selMis.delete(m.m); }
+      else { selMis.add(m.m); }
+      buildMissionChips();
+      applyFilter();
+    }));
+  }
+}
+
+function buildHistogram(){
+  const box = el('hist'); box.innerHTML = '';
+  const max = Math.max(...facets.years.map(y => y.n));
+  for (const y of facets.years) {
+    const i = document.createElement('i');
+    // sqrt so the sparse late years stay visible next to the 1960s peak
+    i.style.height = Math.max(1, Math.sqrt(y.n / max) * 34) + 'px';
+    i.title = `${y.y}: ${y.n.toLocaleString()} scenes`;
+    i.dataset.y = y.y;
+    box.appendChild(i);
+  }
+}
+
+function paintHistogram(lo, hi){
+  for (const i of el('hist').children)
+    i.classList.toggle('on', Number(i.dataset.y) >= lo && Number(i.dataset.y) <= hi);
+}
+
 function applyFilter(){
   const scanned = el('f-scanned').checked, unscanned = el('f-unscanned').checked;
-  const sat = el('f-sat').value;
   const [lo, hi] = yearBounds();
   el('y-lo').textContent = lo; el('y-hi').textContent = hi;
+  paintHistogram(lo, hi);
 
   const clauses = ['all'];
   if (scanned && !unscanned)       clauses.push(['!=',['get','scanned'],false]);
   else if (!scanned && unscanned)  clauses.push(['==',['get','scanned'],false]);
   else if (!scanned && !unscanned) clauses.push(['==',['get','scanned'],'__none__']);
-  if (sat) clauses.push(['==',['get','satellite'],sat]);
+
+  if (facets) {
+    // Only emit a clause when the selection is actually narrower than the
+    // whole set — 'match' over every satellite is pure work for no filtering.
+    if (selSat.size === 0) clauses.push(['==',['get','satellite'],'__none__']);
+    else if (selSat.size < facets.satellites.length)
+      clauses.push(['in',['get','satellite'],['literal',[...selSat]]]);
+
+    if (selCam.size === 0) clauses.push(['==',['get','camera'],'__none__']);
+    else if (selCam.size < facets.cameras.length) {
+      // dataset|camera pairs, because Aft means different things per dataset
+      const pairs = ['any'];
+      for (const k of selCam) {
+        const [ds, cam] = k.split('|');
+        pairs.push(['all',['==',['get','dataset'],ds],['==',['get','camera'],cam]]);
+      }
+      clauses.push(pairs);
+    }
+
+    if (selMis.size > 0)
+      clauses.push(['in',['to-string',['get','mission']],['literal',[...selMis]]]);
+  }
 
   // Both of these read properties that aren't on every feature. Comparing a
   // missing property directly throws ("Expected string but found null"), so
@@ -312,6 +488,13 @@ function applyFilter(){
     if (lo > YMIN) clauses.push(['>=', y, String(lo)]);
     if (hi < YMAX) clauses.push(['<=', y, String(hi)]);
   }
+
+  // Exact dates narrow within the year range rather than replacing it, and
+  // compare as ISO strings — "YYYY-MM-DD" sorts correctly as text.
+  const dLo = el('f-d-lo').value, dHi = el('f-d-hi').value;
+  const d10 = ['slice',['get','acquisitionDate'],0,10];
+  if (dLo) clauses.push(['>=', d10, dLo]);
+  if (dHi) clauses.push(['<=', d10, dHi]);
   const f = clauses.length > 1 ? clauses : null;
   map.setFilter('fill', f);
   map.setFilter('line', f);
@@ -333,15 +516,57 @@ function applyFilter(){
   }
   report();
 }
-for (const id of ['f-scanned','f-unscanned','f-sat','f-y-lo','f-y-hi','f-unpub','f-recent'])
+for (const id of ['f-scanned','f-unscanned','f-y-lo','f-y-hi','f-unpub','f-recent',
+                  'f-d-lo','f-d-hi'])
   el(id).addEventListener('input', applyFilter);
+
+// All / None on the chip groups.
+for (const b of document.querySelectorAll('.mini')) {
+  b.addEventListener('click', () => {
+    const all = b.dataset.all, none = b.dataset.none, grp = all || none;
+    if (!facets) return;
+    if (grp === 'sat') {
+      selSat.clear();
+      if (all) for (const s of facets.satellites) selSat.add(s.name);
+      buildSatChips2(); buildMissionChips();
+    } else if (grp === 'cam') {
+      selCam.clear();
+      if (all) for (const c of facets.cameras) selCam.add(c.dataset + '|' + c.camera);
+      buildCamChips2();
+    } else {
+      selMis.clear();                       // empty means all, so None needs a marker
+      if (none) selMis.add('__none__');
+      buildMissionChips();
+    }
+    applyFilter();
+  });
+}
+
+// Repaint chip state without rebuilding the selection sets.
+function buildSatChips2(){
+  for (const b of el('f-sat').children)
+    b.classList.toggle('on', selSat.has(b.firstChild.textContent));
+}
+function buildCamChips2(){
+  let i = 0;
+  for (const b of el('f-cam').children) {
+    const c = facets.cameras[i++];
+    b.classList.toggle('on', selCam.has(c.dataset + '|' + c.camera));
+  }
+}
 
 el('f-reset').addEventListener('click', () => {
   el('f-scanned').checked = el('f-unscanned').checked = true;
-  el('f-sat').value = '';
   el('f-unpub').checked = false;
   el('f-recent').value = '0';
   el('f-y-lo').value = YMIN; el('f-y-hi').value = YMAX;
+  el('f-d-lo').value = ''; el('f-d-hi').value = '';
+  selMis.clear();
+  if (facets) {
+    selSat.clear(); for (const s of facets.satellites) selSat.add(s.name);
+    selCam.clear(); for (const c of facets.cameras) selCam.add(c.dataset + '|' + c.camera);
+    buildSatChips2(); buildCamChips2(); buildMissionChips();
+  }
   applyFilter();
 });
 el('btn-filters').addEventListener('click', () => {
@@ -349,24 +574,9 @@ el('btn-filters').addEventListener('click', () => {
   el('btn-filters').classList.toggle('on', open);
 });
 
-// ── satellite list, accumulated as tiles arrive ─────────────────────────────
-const satsSeen = new Set();
-function fillSatellites(){
-  if (map.getZoom() < 5) return;
-  let added = false;
-  for (const f of map.querySourceFeatures('scenes', {sourceLayer:'scenes'})){
-    const s = f.properties.satellite;
-    if (s && !satsSeen.has(s)){ satsSeen.add(s); added = true; }
-  }
-  if (!added) return;
-  const sel = el('f-sat'), keep = sel.value;
-  sel.innerHTML = '<option value="">All</option>';
-  for (const s of [...satsSeen].sort()){
-    const o = document.createElement('option'); o.value = o.textContent = s;
-    sel.appendChild(o);
-  }
-  sel.value = keep;
-}
+// The satellite list used to be accumulated from whatever tiles had loaded,
+// which meant it grew as you panned and was wrong until you'd been everywhere.
+// facets.json carries the authoritative list, so that guesswork is gone.
 
 // ── counter + sidebar ───────────────────────────────────────────────────────
 let firstPaint = null;
@@ -393,9 +603,15 @@ function report(){
     const field = el('f-scanned').checked && el('f-unscanned').checked ? 'n'
                 : el('f-scanned').checked ? 'ns' : el('f-unscanned').checked ? 'nu' : null;
     const total = field ? cells.reduce((s,c) => s + (c.properties[field]||0), 0) : 0;
-    const partial = el('f-sat').value || el('f-unpub').checked
+    // The count cells were aggregated with only the scanned split, so any other
+    // active filter makes these totals broader than the footprints would be.
+    const partial = el('f-unpub').checked
                  || el('f-recent').value !== '0'
-                 || Number(el('f-y-lo').value) > YMIN || Number(el('f-y-hi').value) < YMAX;
+                 || el('f-d-lo').value || el('f-d-hi').value
+                 || Number(el('f-y-lo').value) > YMIN || Number(el('f-y-hi').value) < YMAX
+                 || (facets && (selSat.size < facets.satellites.length
+                             || selCam.size < facets.cameras.length))
+                 || selMis.size > 0;
     el('counter').innerHTML = '<b>' + total.toLocaleString() + '</b> scenes in <b>'
       + cells.length + '</b> groups · zoom in for footprints'
       + (partial ? ' <span style="color:#8b98a9">(grouped counts ignore filters)</span>' : '');
@@ -548,9 +764,10 @@ map.on('load', () => {
   if (map.getPitch() !== 0) map.setPitch(0);
   firstPaint = Math.round(performance.now() - t0);
   el('brand-sub').textContent = 'footprint map · ' + firstPaint + ' ms';
-  applyFilter(); fillSatellites(); report();
+  applyFilter(); report();
+  loadFacets();
 });
-map.on('idle', () => { fillSatellites(); report(); });
+map.on('idle', report);
 map.on('moveend', () => { sbShown = SB_PAGE; report(); });
 </script>
 </body>

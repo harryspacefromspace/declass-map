@@ -26,6 +26,9 @@ const SERVABLE = new Map([
   ['scenes.pmtiles', 'application/octet-stream'],
   // Military airbases and missile sites from OSM, for the overlays panel.
   ['overlays.geojson', 'application/json; charset=utf-8'],
+  // Satellite/mission/camera/year counts over the whole archive. The tile map
+  // can't count its own filter options — it only holds the tiles in view.
+  ['facets.json', 'application/json; charset=utf-8'],
 ]);
 
 // PMTiles works by reading a few byte ranges out of a large archive: the header

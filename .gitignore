@@ -16,3 +16,4 @@ overlays.geojson
 dist/
 node_modules/
 .wrangler/
+facets.json
