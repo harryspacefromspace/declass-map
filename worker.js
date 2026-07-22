@@ -32,13 +32,18 @@ const SERVABLE = new Map([
 // and directory first, then only the tiles in view. Without Range support the
 // client would have to pull the whole file, which is the problem it exists to
 // solve.
+// Translate a Range header into an R2 range option. Deliberately does NOT need
+// the object size: asking R2 for the size first would mean a HeadObject on top
+// of the GetObject, i.e. two Class B operations for every tile a map draws.
+// R2 clamps the range itself and reports back what it actually served.
+//
 // Three outcomes, because RFC 7233 treats them differently:
 //   IGNORE  — not a byte range we understand; serve the whole object (200)
-//   null    — well-formed but unsatisfiable; 416
-//   {..}    — a range to read
+//   null    — well-formed but impossible; 416
+//   {..}    — an R2 range option
 const IGNORE = Symbol('ignore');
 
-function parseRange(header, size) {
+function rangeSpec(header) {
   const m = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
   if (!m) return IGNORE;
   const [, rawStart, rawEnd] = m;
@@ -46,17 +51,17 @@ function parseRange(header, size) {
 
   if (rawStart === '') {                        // suffix: last N bytes
     const n = Number(rawEnd);
-    if (n <= 0) return null;
-    const length = Math.min(n, size);
-    return { offset: size - length, length };
+    return n > 0 ? { suffix: n } : null;
   }
 
   const offset = Number(rawStart);
-  if (offset >= size) return null;
-  const end = rawEnd === '' ? size - 1 : Math.min(Number(rawEnd), size - 1);
-  if (end < offset) return null;
-  return { offset, length: end - offset + 1 };
+  if (rawEnd === '') return { offset };
+  const end = Number(rawEnd);
+  return end < offset ? null : { offset, length: end - offset + 1 };
 }
+
+// R2 signals an out-of-bounds range by throwing rather than returning null.
+const isRangeError = (e) => String(e && e.message || e).toLowerCase().includes('range');
 
 export default {
   async fetch(request, env) {
@@ -83,71 +88,101 @@ export default {
       return new Response('Forbidden', { status: 403 });
     }
 
-    // Need the size before a range can be resolved, and a HEAD never needs the
-    // body — one metadata lookup covers both.
-    const head = await env.SCENES.head(key);
-    if (!head) {
-      return new Response('Scene data not published yet', { status: 503 });
-    }
-
-    const headers = new Headers();
-    head.writeHttpMetadata(headers);
-    headers.set('etag', head.httpEtag);
-    headers.set('content-type', contentType);
-    // Rebuilt once a day; revalidation is cheap thanks to the etag.
-    headers.set('cache-control', 'public, max-age=1800, stale-while-revalidate=86400');
-    headers.set('accept-ranges', 'bytes');
+    // Headers common to every path. `obj` is whatever R2 handed back — an
+    // R2Object for HEAD, an R2ObjectBody otherwise; both expose httpEtag/size.
+    const respond = (obj, extra) => {
+      const headers = new Headers();
+      obj.writeHttpMetadata(headers);
+      headers.set('etag', obj.httpEtag);
+      headers.set('content-type', contentType);
+      // Rebuilt once a day; revalidation is cheap thanks to the etag.
+      headers.set('cache-control', 'public, max-age=1800, stale-while-revalidate=86400');
+      headers.set('accept-ranges', 'bytes');
+      for (const [k, v] of Object.entries(extra || {})) headers.set(k, v);
+      return headers;
+    };
 
     // Compare conditionals loosely: when Cloudflare compresses a response it
     // hands the client a WEAK etag (W/"..."), which the browser echoes back — a
     // strict comparison against our strong etag would miss and re-send the lot.
-    const sameEtag = (header) => {
-      const ours = head.httpEtag.replace(/^W\//, '');
+    const sameEtag = (header, etag) => {
+      const ours = etag.replace(/^W\//, '');
       return header.split(',').some(t => t.trim().replace(/^W\//, '') === ours);
     };
 
     const rangeHeader = request.headers.get('range');
-
-    // A conditional GET only short-circuits when the whole object was asked
-    // for; a ranged request has its own freshness rules via If-Range.
     const inm = request.headers.get('if-none-match');
-    if (inm && !rangeHeader && sameEtag(inm)) {
-      return new Response(null, { status: 304, headers });
-    }
 
-    if (rangeHeader) {
-      // If-Range: serve the range only if the object hasn't changed underneath
-      // the client, otherwise fall back to the full body as the spec requires.
-      const ifRange = request.headers.get('if-range');
-      if (!ifRange || sameEtag(ifRange)) {
-        const range = parseRange(rangeHeader, head.size);
-        if (range === null) {
-          return new Response('Range not satisfiable', {
-            status: 416,
-            headers: { 'content-range': `bytes */${head.size}` },
-          });
-        }
-        // Anything we don't understand falls through to the full object.
-        if (range !== IGNORE) {
-          const part = await env.SCENES.get(key, { range });
-          if (!part) return new Response('Scene data not published yet', { status: 503 });
-
-          const end = range.offset + range.length - 1;
-          headers.set('content-range', `bytes ${range.offset}-${end}/${head.size}`);
-          headers.set('content-length', String(range.length));
-          return new Response(request.method === 'HEAD' ? null : part.body,
-                              { status: 206, headers });
-        }
-      }
-    }
-
+    // ── HEAD: metadata only, no body to fetch ──────────────────────────────
     if (request.method === 'HEAD') {
-      headers.set('content-length', String(head.size));
-      return new Response(null, { headers });
+      const head = await env.SCENES.head(key);
+      if (!head) return new Response('Scene data not published yet', { status: 503 });
+      if (inm && sameEtag(inm, head.httpEtag)) {
+        return new Response(null, { status: 304, headers: respond(head) });
+      }
+      return new Response(null, {
+        headers: respond(head, { 'content-length': String(head.size) }),
+      });
     }
 
-    const obj = await env.SCENES.get(key);
+    // ── Ranged GET: the hot path, one R2 read ──────────────────────────────
+    const spec = rangeHeader ? rangeSpec(rangeHeader) : IGNORE;
+
+    if (rangeHeader && spec !== IGNORE) {
+      // A well-formed but impossible range still owes the client the object
+      // size, which is the one case worth a metadata lookup for.
+      if (spec === null) {
+        const head = await env.SCENES.head(key);
+        return new Response('Range not satisfiable', {
+          status: 416,
+          headers: { 'content-range': `bytes */${head ? head.size : 0}` },
+        });
+      }
+
+      let part;
+      try {
+        part = await env.SCENES.get(key, { range: spec });
+      } catch (e) {
+        if (!isRangeError(e)) throw e;
+        const head = await env.SCENES.head(key);
+        return new Response('Range not satisfiable', {
+          status: 416,
+          headers: { 'content-range': `bytes */${head ? head.size : 0}` },
+        });
+      }
+      if (!part) return new Response('Scene data not published yet', { status: 503 });
+
+      // If-Range: if the object changed under the client, the spec says send
+      // the whole thing instead of a slice of something it no longer has.
+      const ifRange = request.headers.get('if-range');
+      if (ifRange && !sameEtag(ifRange, part.httpEtag)) {
+        const whole = await env.SCENES.get(key);
+        if (!whole) return new Response('Scene data not published yet', { status: 503 });
+        return new Response(whole.body, { headers: respond(whole) });
+      }
+
+      // R2 reports what it actually served, which is what the client must be
+      // told — it clamps, so the resolved range can differ from the request.
+      const served = part.range || {};
+      const offset = served.offset ?? spec.offset ?? (part.size - (spec.suffix || 0));
+      const length = served.length ?? (part.size - offset);
+
+      return new Response(part.body, {
+        status: 206,
+        headers: respond(part, {
+          'content-range': `bytes ${offset}-${offset + length - 1}/${part.size}`,
+          'content-length': String(length),
+        }),
+      });
+    }
+
+    // ── Whole-object GET; R2 evaluates the conditional so a 304 costs one read
+    const obj = await env.SCENES.get(key, { onlyIf: inm ? request.headers : undefined });
     if (!obj) return new Response('Scene data not published yet', { status: 503 });
-    return new Response(obj.body, { headers });
+    // A precondition failure yields an R2Object with no body — that's the 304.
+    if (!('body' in obj) || !obj.body) {
+      return new Response(null, { status: 304, headers: respond(obj) });
+    }
+    return new Response(obj.body, { headers: respond(obj) });
   }
 };
