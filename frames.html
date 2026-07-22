@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Frame browser — declassified imagery</title>
+<link href="vendor/maplibre-gl.css" rel="stylesheet">
+<script src="vendor/maplibre-gl.js"></script>
 <style>
   :root{--bg:#0b0e13;--panel:#11161e;--edge:#2a3441;--ink:#e6edf3;--dim:#8b98a9;
         --hi:#f0b429;--un:#a78bfa;--chip:#1a2029}
@@ -81,8 +83,20 @@
   .cell.un .n{color:var(--un)}
 
   /* side list */
-  #side{width:290px;border-left:1px solid var(--edge);background:#0d1118;
+  #side{width:340px;border-left:1px solid var(--edge);background:#0d1118;
         display:flex;flex-direction:column;min-height:0}
+  #fbar{padding:9px 14px;border-bottom:1px solid var(--edge);
+        display:flex;flex-direction:column;gap:8px}
+  #cam-chips{display:flex;flex-wrap:wrap;gap:5px}
+  .fchip{background:#0b0e13;border:1px solid var(--edge);color:var(--dim);
+         border-radius:5px;font:inherit;font-size:11px;padding:3px 8px;cursor:pointer}
+  .fchip:hover{border-color:#3d4b5c}
+  .fchip.on{color:var(--ink);border-color:#6c5ce7;background:#6c5ce71a}
+  #unsc-lbl{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--dim);cursor:pointer}
+  #minimap{height:150px;position:relative;background:#080b0f}
+  #minimap canvas{cursor:default}
+  #mini-cred{font-size:9px;color:#5c6773;padding:2px 14px;border-bottom:1px solid var(--edge);
+             text-align:right}
   #side h2{margin:0;padding:11px 14px;font-size:12px;font-weight:600;
            border-bottom:1px solid var(--edge)}
   #side h2 small{display:block;color:var(--dim);font-weight:400;font-size:11px;margin-top:2px}
@@ -139,6 +153,12 @@
 
   <aside id="side">
     <h2 id="side-title">No mission loaded<small id="side-sub">—</small></h2>
+    <div id="fbar">
+      <div id="cam-chips"></div>
+      <label id="unsc-lbl"><input type="checkbox" id="unsc"> Show unscanned frames</label>
+    </div>
+    <div id="minimap"></div>
+    <div id="mini-cred">© OpenStreetMap · © CARTO</div>
     <div id="jump">
       <input class="ctl" id="jump-n" type="number" min="1" placeholder="frame #">
       <button class="ctl" id="jump-go">Go</button>
@@ -303,17 +323,156 @@ async function open(entityId, quiet){
     if (!cur || cur.dataset !== dataset || cur.mission !== mission){
       el('shot-msg').textContent = `Loading mission ${mission}…`;
       cur = await loadMission(dataset, mission);
+      buildFilters();
+      computeVisible();
       renderList();
+      miniSetMission();
     }
   } catch (e){ toast(String(e.message || e)); return; }
 
   const i = cur.frames.findIndex(f => f[F.ID].toUpperCase() === want);
   if (i < 0){
     toast(`${want} is not in mission ${mission}.`);
-    if (!quiet) show(0);
+    if (!quiet && visible.length) show(visible[0]);
     return;
   }
+  // Explicitly asking for a frame overrides the filters that would hide it —
+  // otherwise searching an unscanned ID would silently land on a neighbour.
+  if (!visible.includes(i)){
+    if (!showUnscanned && !cur.frames[i][F.SCANNED]){
+      showUnscanned = true; el('unsc').checked = true;
+    }
+    selCam.add(camKey(cur.frames[i]));
+    for (const b of el('cam-chips').children)
+      b.classList.toggle('on', selCam.has(b.dataset.cam));
+    computeVisible(); renderList();
+  }
   show(i);
+}
+
+// ── mini location map ───────────────────────────────────────────────────────
+// A frame's stored point is its footprint centroid — rough, but enough to see
+// where on Earth (and where in the orbit) you are. The mission's other frames
+// are plotted faint for context, the current one in amber.
+let mini = null, miniReady = false;
+function initMini(){
+  if (mini) return;
+  mini = new maplibregl.Map({
+    container: 'minimap', attributionControl: false,
+    center: [0, 20], zoom: 0.7, dragRotate: false, pitchWithRotate: false,
+    style: { version: 8, sources: {
+      base: { type: 'raster', tileSize: 256,
+        tiles: ['https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
+                'https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png'] },
+    }, layers: [{ id: 'base', type: 'raster', source: 'base' }] },
+  });
+  mini.on('load', () => {
+    mini.addSource('pts', { type: 'geojson', data: fc([]) });
+    mini.addLayer({ id: 'pts', type: 'circle', source: 'pts',
+      paint: { 'circle-radius': 2.4, 'circle-color': '#8b98a9', 'circle-opacity': 0.55 } });
+    mini.addSource('cur', { type: 'geojson', data: fc([]) });
+    mini.addLayer({ id: 'cur', type: 'circle', source: 'cur',
+      paint: { 'circle-radius': 6, 'circle-color': '#f0b429',
+               'circle-stroke-color': '#0b0e13', 'circle-stroke-width': 1.5 } });
+    miniReady = true;
+    miniSetMission();
+    if (cur && pos >= 0) miniShow(cur.frames[pos]);
+  });
+}
+const fc = feats => ({ type: 'FeatureCollection', features: feats });
+const pt = (lon, lat) => ({ type: 'Feature', geometry: { type: 'Point', coordinates: [lon, lat] }, properties: {} });
+
+function miniSetMission(){
+  if (!miniReady || !cur) return;
+  const feats = [];
+  for (const f of cur.frames) if (f[F.LAT] != null) feats.push(pt(f[F.LON], f[F.LAT]));
+  mini.getSource('pts').setData(fc(feats));
+}
+function miniShow(f){
+  if (!miniReady) return;
+  if (f[F.LAT] == null){ mini.getSource('cur').setData(fc([])); return; }
+  mini.getSource('cur').setData(fc([pt(f[F.LON], f[F.LAT])]));
+  mini.easeTo({ center: [f[F.LON], f[F.LAT]], zoom: Math.max(mini.getZoom(), 3.2), duration: 450 });
+}
+
+// ── frame filters (camera, scanned) ─────────────────────────────────────────
+// Navigation runs over `visible` — the mission's frames that pass the filters —
+// not the raw list, so stepping skips what's filtered out and the strip and
+// list only show what you're actually browsing. Positions stay absolute (frame
+// N of the whole mission), so a filtered view doesn't renumber the frames.
+let showUnscanned = false;
+let selCam = new Set();          // cameras currently enabled
+let visible = [];                // indices into cur.frames, ascending
+
+const camKey = f => f[F.CAM] || '';
+
+function buildFilters(){
+  const present = [];
+  const seen = new Set();
+  for (const f of cur.frames){ const c = camKey(f); if (!seen.has(c)){ seen.add(c); present.push(c); } }
+  present.sort();
+  selCam = new Set(present);     // a fresh mission starts with every camera on
+
+  const box = el('cam-chips');
+  box.innerHTML = '';
+  // Nothing to choose between if the mission flew one camera.
+  box.style.display = present.length > 1 ? 'flex' : 'none';
+  if (present.length > 1){
+    for (const c of present){
+      const b = document.createElement('button');
+      b.className = 'fchip on';
+      b.textContent = c || 'no camera';
+      b.dataset.cam = c;
+      b.addEventListener('click', () => {
+        b.classList.toggle('on');
+        b.classList.contains('on') ? selCam.add(c) : selCam.delete(c);
+        onFilterChange();
+      });
+      box.appendChild(b);
+    }
+  }
+  el('unsc').checked = showUnscanned;
+}
+
+function computeVisible(){
+  visible = [];
+  for (let i = 0; i < cur.frames.length; i++){
+    const f = cur.frames[i];
+    if (!showUnscanned && !f[F.SCANNED]) continue;
+    if (!selCam.has(camKey(f))) continue;
+    visible.push(i);
+  }
+}
+
+function nearestVisible(i){
+  if (!visible.length) return -1;
+  let best = visible[0], bd = Infinity;
+  for (const v of visible){
+    const d = Math.abs(v - i);
+    if (d < bd){ bd = d; best = v; }
+    if (v > i) break;               // visible is ascending; distance only grows
+  }
+  return best;
+}
+
+function updateNav(){
+  const vi = visible.indexOf(pos);
+  el('prev').disabled = vi <= 0;
+  el('next').disabled = vi < 0 || vi >= visible.length - 1;
+}
+
+// Re-run when a filter changes: if the current frame survived, just repaint;
+// if it was filtered out, jump to the nearest frame that wasn't.
+function onFilterChange(){
+  computeVisible();
+  renderList();
+  if (!visible.length){
+    el('prev').disabled = el('next').disabled = true;
+    el('strip').innerHTML = '';
+    return;
+  }
+  if (visible.includes(pos)){ markActive(); buildStrip(); updateNav(); }
+  else show(nearestVisible(pos));
 }
 
 function show(i){
@@ -340,7 +499,7 @@ function show(i){
       // A different frame can have a different aspect, so a preserved pan may
       // now be out of bounds — re-clamp against the newly laid-out image.
       if (keepZoom && view.scale > 1.001){ clampView(); applyView(); }
-      prefetch(pos + 1); prefetch(pos - 1);
+      prefetchVisibleNeighbours();
     };
     full.onerror = () => {
       if (seq !== show._seq) return;
@@ -369,39 +528,48 @@ function show(i){
     ? `/tiles.html#map=9/${f[F.LAT]}/${f[F.LON]}` : '/tiles.html';
   el('onmap').href = mapHref;
 
-  el('prev').disabled = i <= 0;
-  el('next').disabled = i >= cur.frames.length - 1;
-
+  updateNav();
   markActive();
   buildStrip();
+  miniShow(f);
   history.replaceState(null, '', '#' + f[F.ID]);
 }
 
-function step(d){ if (cur && pos >= 0) show(Math.min(cur.frames.length - 1, Math.max(0, pos + d))); }
-
-// Warm the neighbours so ← and → land instantly. Only ever one either side:
-// these are ~5MB each, so reading further ahead would pull tens of MB for
-// frames that may never be looked at.
-const warmed = new Set();
-function prefetch(i){
-  if (!cur || i < 0 || i >= cur.frames.length) return;
-  const tail = cur.frames[i][F.BROWSE];
-  if (!tail || warmed.has(tail)) return;
-  warmed.add(tail);
-  const im = new Image();
-  im.decoding = 'async';
-  im.src = browseUrl(tail);
+// Step within the visible set, so a camera/scanned filter is respected.
+function step(d){
+  if (!cur || pos < 0 || !visible.length) return;
+  const vi = visible.indexOf(pos);
+  if (vi < 0){ show(nearestVisible(pos)); return; }
+  show(visible[Math.min(visible.length - 1, Math.max(0, vi + d))]);
 }
 
-// Filmstrip shows a window around the current frame — rendering 20,000 thumbs
-// would fetch 20,000 images from USGS.
+// Warm the visible neighbours so ← and → land instantly. Only ever one either
+// side: these are ~5MB each, so reading further ahead would pull tens of MB for
+// frames that may never be looked at.
+const warmed = new Set();
+function prefetchVisibleNeighbours(){
+  const vi = visible.indexOf(pos);
+  if (vi < 0) return;
+  for (const k of [vi + 1, vi - 1]){
+    if (k < 0 || k >= visible.length) continue;
+    const tail = cur.frames[visible[k]][F.BROWSE];
+    if (!tail || warmed.has(tail)) continue;
+    warmed.add(tail);
+    const im = new Image(); im.decoding = 'async'; im.src = browseUrl(tail);
+  }
+}
+
+// Filmstrip shows a window around the current frame, over the visible set —
+// rendering 20,000 cells would build 20,000 nodes for one screen.
 const WIN = 12;
 function buildStrip(){
   const strip = el('strip');
-  const lo = Math.max(0, pos - WIN), hi = Math.min(cur.frames.length, pos + WIN + 1);
   strip.innerHTML = '';
-  for (let i = lo; i < hi; i++){
-    const f = cur.frames[i];
+  const vi = visible.indexOf(pos);
+  if (vi < 0) return;
+  const lo = Math.max(0, vi - WIN), hi = Math.min(visible.length, vi + WIN + 1);
+  for (let k = lo; k < hi; k++){
+    const i = visible[k], f = cur.frames[i];
     const c = document.createElement('div');
     c.className = 'cell' + (i === pos ? ' on' : '') + (f[F.SCANNED] ? '' : ' un');
     c.title = `${f[F.ID]} · ${f[F.DATE]}`;
@@ -416,16 +584,20 @@ function buildStrip(){
 }
 
 function renderList(){
+  const total = cur.frames.length, shown = visible.length;
+  const filtered = shown < total;
   el('side-title').innerHTML = `Mission ${cur.mission}` +
-    `<small id="side-sub">${cur.satellite} · ${cur.frames.length.toLocaleString()} frames · ` +
-    `${cur.frames[0][F.DATE]} → ${cur.frames[cur.frames.length-1][F.DATE]}</small>`;
-  el('jump-n').max = cur.frames.length;
+    `<small id="side-sub">${cur.satellite} · ` +
+    (filtered ? `${shown.toLocaleString()} of ${total.toLocaleString()} frames` :
+                `${total.toLocaleString()} frames`) +
+    ` · ${cur.frames[0][F.DATE]} → ${cur.frames[total-1][F.DATE]}</small>`;
+  el('jump-n').max = total;
 
   // Built as one string: 20,000 appendChild calls locked the page for seconds.
   const list = el('list');
-  list.innerHTML = cur.frames.map((f, i) =>
-    `<div class="row${f[F.SCANNED] ? '' : ' un'}" data-i="${i}">` +
-    `<span class="i">${f[F.ID]}</span><span class="p">${i + 1}</span></div>`).join('');
+  list.innerHTML = visible.map(i => { const f = cur.frames[i];
+    return `<div class="row${f[F.SCANNED] ? '' : ' un'}" data-i="${i}">` +
+      `<span class="i">${f[F.ID]}</span><span class="p">${i + 1}</span></div>`; }).join('');
   list.onclick = e => {
     const row = e.target.closest('.row');
     if (row) show(Number(row.dataset.i));
@@ -444,20 +616,29 @@ el('go').addEventListener('click', () => open(el('eid').value));
 el('eid').addEventListener('keydown', e => { if (e.key === 'Enter') open(el('eid').value); });
 el('prev').addEventListener('click', () => step(-1));
 el('next').addEventListener('click', () => step(1));
+el('unsc').addEventListener('change', e => {
+  showUnscanned = e.target.checked;
+  if (cur) onFilterChange();
+});
 el('jump-go').addEventListener('click', () => {
   const n = Number(el('jump-n').value);
-  if (cur && n >= 1 && n <= cur.frames.length) show(n - 1);
+  // Snap to the nearest visible frame so a jump into a filtered-out range still
+  // lands somewhere you can step from.
+  if (cur && visible.length && n >= 1 && n <= cur.frames.length) show(nearestVisible(n - 1));
 });
 el('jump-n').addEventListener('keydown', e => { if (e.key === 'Enter') el('jump-go').click(); });
 
 document.addEventListener('keydown', e => {
   // Not while typing in the ID box, or arrow keys would move the caret AND the frame.
   if (e.target.tagName === 'INPUT') return;
+  if (!cur || !visible.length) return;
   if (e.key === 'ArrowLeft'){ e.preventDefault(); step(-1); }
   if (e.key === 'ArrowRight'){ e.preventDefault(); step(1); }
-  if (e.key === 'Home' && cur) show(0);
-  if (e.key === 'End' && cur) show(cur.frames.length - 1);
+  if (e.key === 'Home') show(visible[0]);
+  if (e.key === 'End') show(visible[visible.length - 1]);
 });
+
+initMini();
 
 // Deep link: /frames.html#D3C1214-300989A017
 const initial = decodeURIComponent(location.hash.slice(1));
