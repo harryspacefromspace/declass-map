@@ -154,9 +154,16 @@ jobs:
           # simplification keeps all four corners and the client overzooms them
           # cleanly past that. displayId duplicates entityId and the browse URL
           # is derivable — both would otherwise repeat in every tile they touch.
+          # --drop-rate=1 disables tippecanoe's default thinning. Without it it
+          # drops features at every zoom below maxzoom as a matter of course —
+          # 4,580 footprints vanished at z5 on the first run — which is right for
+          # a basemap but wrong here, where a missing footprint means a scene the
+          # archive has and the map won't show. --drop-densest-as-needed stays as
+          # the bounded fallback for tiles that would otherwise blow the limit.
           tippecanoe -o footprints.mbtiles -l scenes -Z5 -z8 \
             -x displayId -x browse \
             --no-tiny-polygon-reduction \
+            --drop-rate=1 \
             --drop-densest-as-needed \
             --force available_scenes.geojson
 
