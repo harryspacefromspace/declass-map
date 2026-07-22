@@ -21,6 +21,7 @@
        border-radius:8px;padding:6px 10px;font:inherit;font-size:12.5px;cursor:pointer}
   .ctl:hover{border-color:#3d4b5c}
   .ctl:disabled{opacity:.4;cursor:default}
+  .ctl.on{border-color:#f0b42955;color:var(--hi);background:#f0b4290d}
   #eid{flex:1;min-width:230px;max-width:340px;cursor:text;
        font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
   .spacer{flex:1}
@@ -31,9 +32,26 @@
   #stage{flex:1;display:flex;flex-direction:column;min-width:0;background:#080b0f}
   #stage-top{flex:1;position:relative;min-height:0;display:flex;align-items:center;
              justify-content:center;overflow:hidden}
-  #shot{max-width:100%;max-height:100%;object-fit:contain;display:none}
+  #stage-top.zoomed{cursor:grab}
+  #stage-top.grabbing{cursor:grabbing}
+  #shot{max-width:100%;max-height:100%;object-fit:contain;display:none;
+        transform-origin:center center;will-change:transform;touch-action:none;
+        -webkit-user-select:none;user-select:none;-webkit-user-drag:none}
   #shot.show{display:block}
   #shot-msg{position:absolute;color:var(--dim);font-size:13px;text-align:center;padding:20px}
+  /* zoom controls, bottom-left of the image */
+  #zoomctl{position:absolute;left:10px;bottom:10px;z-index:3;display:flex;gap:4px;
+           align-items:center;opacity:0;transition:opacity .15s;pointer-events:none}
+  #stage-top:hover #zoomctl,#stage-top.zoomed #zoomctl{opacity:1;pointer-events:auto}
+  #zoomctl button{width:26px;height:26px;padding:0;font-size:15px;line-height:1;
+                  background:#11161ee6;border:1px solid var(--edge);color:var(--ink);
+                  border-radius:6px;cursor:pointer}
+  #zoomctl button:hover{border-color:#3d4b5c}
+  #zoomctl #zoomlvl{font-size:11px;color:var(--dim);background:#11161ee6;
+                    border:1px solid var(--edge);border-radius:6px;padding:0 8px;height:26px;
+                    display:flex;align-items:center;font-variant-numeric:tabular-nums;min-width:44px;
+                    justify-content:center}
+  #zoomctl .hint{font-size:10.5px;color:#5c6773;margin-left:4px}
   #meta{border-top:1px solid var(--edge);padding:10px 14px;background:#0d1118;
         display:flex;gap:18px;flex-wrap:wrap;align-items:center}
   #meta .k{color:var(--dim);font-size:10.5px;text-transform:uppercase;letter-spacing:.06em}
@@ -94,9 +112,10 @@
   <button class="ctl" id="go">Open</button>
   <button class="ctl" id="prev" disabled>← Prev</button>
   <button class="ctl" id="next" disabled>Next →</button>
+  <button class="ctl" id="lock" title="Keep the same zoom & position when stepping frames">🔒 Lock zoom</button>
   <div class="spacer"></div>
   <span style="color:var(--dim);font-size:11px">
-    <kbd>←</kbd> <kbd>→</kbd> to step</span>
+    <kbd>←</kbd> <kbd>→</kbd> to step · scroll to zoom</span>
   <a class="ctl" id="ee" target="_blank" rel="noopener">EarthExplorer ↗</a>
   <a class="ctl" id="onmap" target="_blank" rel="noopener">Show on map ↗</a>
 </div>
@@ -106,6 +125,13 @@
     <div id="stage-top">
       <div id="shot-msg">Enter an entity ID to start.</div>
       <img id="shot" alt="">
+      <div id="zoomctl">
+        <button id="z-out" title="Zoom out">−</button>
+        <span id="zoomlvl">1.0×</span>
+        <button id="z-in" title="Zoom in">+</button>
+        <button id="z-fit" title="Fit to view">⤢</button>
+        <span class="hint">scroll · drag · double-click to fit</span>
+      </div>
     </div>
     <div id="meta"></div>
     <div id="strip"></div>
@@ -167,6 +193,91 @@ const browseUrl = tail => {
 
 const F = {ID:0, DATE:1, BROWSE:2, CAM:3, SCANNED:4, LON:5, LAT:6};
 
+// ── pan / zoom ──────────────────────────────────────────────────────────────
+// The browse images are up to 29332px wide, so at fit-to-view you're seeing a
+// ~20x downscale. Wheel zooms toward the cursor, drag pans, and with the frames
+// being one long orbital strip, being able to move along it is the point.
+const MAXZOOM = 24;
+const view = {scale:1, tx:0, ty:0};     // transform applied to #shot
+let keepZoom = false;                   // preserve view across next/prev
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+function applyView(){
+  const shot = el('shot'), top = el('stage-top');
+  shot.style.transform = `translate(${view.tx}px,${view.ty}px) scale(${view.scale})`;
+  top.classList.toggle('zoomed', view.scale > 1.001);
+  el('zoomlvl').textContent = view.scale.toFixed(1) + '×';
+}
+function clampView(){
+  const shot = el('shot');
+  // Keep the container centre over the image, so it can't be flung off-screen.
+  const mx = shot.offsetWidth  * view.scale / 2;
+  const my = shot.offsetHeight * view.scale / 2;
+  view.tx = clamp(view.tx, -mx, mx);
+  view.ty = clamp(view.ty, -my, my);
+}
+function resetView(){ view.scale = 1; view.tx = 0; view.ty = 0; applyView(); }
+
+// Zoom toward a screen point, holding whatever is under it fixed. Origin is the
+// element centre, so d is the cursor offset from that centre.
+function zoomAt(clientX, clientY, factor){
+  const shot = el('shot');
+  if (!shot.classList.contains('show')) return;
+  const rect = el('stage-top').getBoundingClientRect();
+  const dx = clientX - (rect.left + rect.width  / 2);
+  const dy = clientY - (rect.top  + rect.height / 2);
+  const ns = clamp(view.scale * factor, 1, MAXZOOM);
+  const r = ns / view.scale;
+  view.tx = dx - r * (dx - view.tx);
+  view.ty = dy - r * (dy - view.ty);
+  view.scale = ns;
+  if (view.scale <= 1.001){ view.tx = 0; view.ty = 0; }   // snap back to centred
+  clampView(); applyView();
+}
+
+(function initPanZoom(){
+  const top = el('stage-top');
+  top.addEventListener('wheel', e => {
+    if (!el('shot').classList.contains('show')) return;
+    e.preventDefault();
+    zoomAt(e.clientX, e.clientY, Math.exp(-e.deltaY * 0.0016));
+  }, {passive:false});
+
+  let panning = false, px = 0, py = 0;
+  top.addEventListener('pointerdown', e => {
+    if (view.scale <= 1.001 || !el('shot').classList.contains('show')) return;
+    panning = true; px = e.clientX; py = e.clientY;
+    top.setPointerCapture(e.pointerId); top.classList.add('grabbing');
+  });
+  top.addEventListener('pointermove', e => {
+    if (!panning) return;
+    view.tx += e.clientX - px; view.ty += e.clientY - py;
+    px = e.clientX; py = e.clientY;
+    clampView(); applyView();
+  });
+  const endPan = () => { panning = false; top.classList.remove('grabbing'); };
+  top.addEventListener('pointerup', endPan);
+  top.addEventListener('pointercancel', endPan);
+
+  top.addEventListener('dblclick', e => {
+    if (view.scale > 1.001) resetView();
+    else zoomAt(e.clientX, e.clientY, 4);
+  });
+
+  const centre = () => {
+    const r = el('stage-top').getBoundingClientRect();
+    return [r.left + r.width / 2, r.top + r.height / 2];
+  };
+  el('z-in').addEventListener('click',  () => zoomAt(...centre(), 1.5));
+  el('z-out').addEventListener('click', () => zoomAt(...centre(), 1 / 1.5));
+  el('z-fit').addEventListener('click', resetView);
+
+  el('lock').addEventListener('click', () => {
+    keepZoom = !keepZoom;
+    el('lock').classList.toggle('on', keepZoom);
+  });
+})();
+
 function toast(msg){
   const t = el('toast'); t.textContent = msg; t.style.display = 'block';
   clearTimeout(toast._t); toast._t = setTimeout(() => t.style.display = 'none', 2600);
@@ -214,6 +325,11 @@ function show(i){
   img.classList.remove('show');
   msg.style.display = 'block';
 
+  // The #shot element is reused across frames, so its transform persists on its
+  // own. With Lock off we drop back to fit; with Lock on the zoom & position
+  // carry over, which is what makes comparing consecutive frames useful.
+  if (!keepZoom) resetView(); else applyView();
+
   if (f[F.BROWSE]){
     const seq = ++show._seq;
     msg.textContent = 'Loading browse image…';
@@ -221,6 +337,9 @@ function show(i){
     full.onload = () => {
       if (seq !== show._seq) return;      // stepped away before it arrived
       img.src = full.src; img.classList.add('show'); msg.style.display = 'none';
+      // A different frame can have a different aspect, so a preserved pan may
+      // now be out of bounds — re-clamp against the newly laid-out image.
+      if (keepZoom && view.scale > 1.001){ clampView(); applyView(); }
       prefetch(pos + 1); prefetch(pos - 1);
     };
     full.onerror = () => {
