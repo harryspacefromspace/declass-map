@@ -38,14 +38,49 @@ UA = ("declass-map/1.0 (https://declass-map.spacefromspace.com; "
       "harry@spacefromspace.com)")
 
 LAYERS = {
-    "airbases": 'nwr["military"="airfield"];',
-    "silos": 'nwr["bunker_type"="missile_silo"];',
+    "airbases":  'nwr["military"="airfield"];',
+    "silos":     'nwr["bunker_type"="missile_silo"];',
+    # Reactors doubled as plutonium sources — prime reconnaissance targets.
+    "nuclear":   'nwr["power"="plant"]["plant:source"="nuclear"];',
+    # Submarine pens, especially SSBN, were top imaging priorities.
+    "naval":     'nwr["military"="naval_base"];',
+    "spaceport": 'nwr["aeroway"="spaceport"];',
 }
 
 FALLBACK_NAMES = {
-    "airbases": "Military airfield",
-    "silos": "Missile silo",
+    "airbases":  "Military airfield",
+    "silos":     "Missile silo",
+    "nuclear":   "Nuclear power plant",
+    "naval":     "Naval base",
+    "spaceport": "Spaceport",
 }
+
+# Nuclear test sites are curated, not from OSM: the tag that exists
+# (military=nuclear_explosion_site) marks ~2,800 individual shot points, which
+# would bury the map under Nevada and Semipalatinsk. What's useful is the ~19
+# test *ranges* themselves, which are famous and stable — so they're listed by
+# hand. (name, lat, lon)
+TEST_SITES = [
+    ("Nevada Test Site (NNSS)",              37.116, -116.056),
+    ("Semipalatinsk Test Site (Polygon)",    50.430,   77.810),
+    ("Novaya Zemlya Test Site",              73.400,   54.800),
+    ("Lop Nur Test Base",                    41.530,   88.300),
+    ("Bikini Atoll",                         11.600,  165.380),
+    ("Enewetak Atoll",                       11.500,  162.330),
+    ("Maralinga (Australia)",               -30.170,  131.620),
+    ("Emu Field (Australia)",               -28.530,  132.420),
+    ("Montebello Islands (Australia)",      -20.420,  115.550),
+    ("Mururoa Atoll",                       -21.850, -138.900),
+    ("Fangataufa Atoll",                    -22.240, -138.750),
+    ("Reggane (Algeria)",                    26.310,    0.060),
+    ("In Ekker (Algeria)",                   24.060,    5.050),
+    ("Pokhran Range (India)",                27.080,   71.720),
+    ("Ras Koh / Chagai (Pakistan)",          28.830,   64.770),
+    ("Kiritimati / Christmas Island",         1.870, -157.400),
+    ("Johnston Atoll",                       16.730, -169.530),
+    ("Amchitka Island (Alaska)",             51.470,  179.100),
+    ("Malden Island (Grapple)",              -4.030, -154.980),
+]
 
 
 def overpass(selector, timeout=240):
@@ -102,14 +137,37 @@ def main():
     counts = {}
     for kind, selector in LAYERS.items():
         print(f"fetching {kind} …")
-        got = to_features(overpass(selector), kind)
-        # A mirror can answer 200 with an empty set when it's unhappy; treating
-        # that as success would quietly publish an empty overlay.
+        # Best-effort per layer: one Overpass query timing out shouldn't drop
+        # the others. The floor check below refuses to publish if too little
+        # came back overall, so a bad Overpass day keeps the previous file.
+        try:
+            got = to_features(overpass(selector), kind)
+        except Exception as exc:
+            print(f"  {kind}: FAILED ({exc}) — skipping this run")
+            continue
         if not got:
-            raise RuntimeError(f"{kind}: Overpass returned no usable features")
+            print(f"  {kind}: no features returned — skipping")
+            continue
         counts[kind] = len(got)
         features.extend(got)
         print(f"  {kind}: {len(got):,} sites")
+
+    # Curated nuclear test sites, always present (no network dependency).
+    for name, lat, lon in TEST_SITES:
+        features.append({
+            "type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [round(lon, 5), round(lat, 5)]},
+            "properties": {"n": name, "k": "testsite"},
+        })
+    counts["testsite"] = len(TEST_SITES)
+    print(f"  testsite: {len(TEST_SITES)} sites (curated)")
+
+    # If Overpass gave us almost nothing, don't overwrite a good file with a
+    # near-empty one — CI keeps the last upload.
+    osm_total = sum(v for k, v in counts.items() if k != "testsite")
+    if osm_total < 100:
+        raise RuntimeError(
+            f"only {osm_total} OSM overlay features — refusing to publish")
 
     doc = {
         "type": "FeatureCollection",

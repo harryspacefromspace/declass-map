@@ -76,6 +76,24 @@
   .yr b{color:var(--hi)}
   hr{border:0;border-top:1px solid var(--edge);margin:11px 0}
 
+  /* overlays panel */
+  #ovpanel{position:absolute;left:12px;bottom:12px;z-index:6;width:250px;
+           background:var(--panel);border:1px solid var(--edge);border-radius:10px;
+           padding:12px 14px;backdrop-filter:blur(8px);display:none}
+  #ovpanel.open{display:block}
+  .ov-h{font-size:13px;font-weight:600}
+  .ov-sub{color:var(--dim);font-size:10.5px;margin:2px 0 9px}
+  .ov-row{display:flex;align-items:center;gap:9px;margin:6px 0;cursor:pointer;
+          font-size:12.5px;user-select:none}
+  .ov-row .dot{width:11px;height:11px;border-radius:50%;flex:none;
+               border:1.5px solid transparent}
+  .ov-row .nm{flex:1}
+  .ov-row .ct{color:#5c6773;font-size:10.5px;font-variant-numeric:tabular-nums}
+  .ov-row.on .nm{color:var(--ink)}
+  .ov-row:not(.on){color:var(--dim)}
+  .ov-row:not(.on) .dot{background:transparent!important;border-color:#3d4b5c}
+  .ov-note{color:#5c6773;font-size:10px;margin-top:10px;line-height:1.4}
+
   /* counter */
   #counter{position:absolute;bottom:14px;left:50%;transform:translateX(-50%);z-index:5;
            background:var(--panel);border:1px solid var(--edge);border-radius:20px;
@@ -133,6 +151,7 @@
   <button class="ctl" id="btn-filters">Filters</button>
   <input class="ctl" id="search" placeholder="Entity ID, or lat, lon" autocomplete="off">
   <div class="spacer"></div>
+  <button class="ctl" id="btn-ov">Overlays</button>
   <button class="ctl" id="btn-list">List</button>
   <div class="seg" id="bm">
     <button data-bm="dark" class="on">Dark</button>
@@ -196,6 +215,14 @@
 
   <hr>
   <button class="ctl" id="f-reset" style="width:100%">Reset filters</button>
+</div>
+
+<div id="ovpanel">
+  <div class="ov-h">Points of interest</div>
+  <div class="ov-sub">Cold War reconnaissance targets · OpenStreetMap + curated</div>
+  <div id="ov-list"></div>
+  <div class="ov-note">Historic &amp; present-day strategic sites — the kind of
+    targets these satellites were built to photograph.</div>
 </div>
 
 <div id="counter">loading…</div>
@@ -733,10 +760,14 @@ function showPopup(p, lngLat){
   pop.on('close', () => map.setFilter('sel', ['==',['get','entityId'],'__none__']));
   pop.addTo(map);
 }
-map.on('click', 'fill', e => showPopup(e.features[0].properties, e.lngLat));
-map.on('click', 'cells', e =>
+// An overlay point sitting on top of a footprint should win the click — the
+// footprint is always reachable elsewhere, the point is a specific target.
+const overlayHit = e => map.getLayer('ov-pts') &&
+  map.queryRenderedFeatures(e.point, {layers:['ov-pts']}).length > 0;
+map.on('click', 'fill', e => { if (!overlayHit(e)) showPopup(e.features[0].properties, e.lngLat); });
+map.on('click', 'cells', e => { if (overlayHit(e)) return;
   map.easeTo({center:e.features[0].geometry.coordinates,
-              zoom:Math.min(map.getZoom()+2.5, 8), duration:700}));
+              zoom:Math.min(map.getZoom()+2.5, 8), duration:700}); });
 for (const l of ['fill','cells','cells-count']){
   map.on('mouseenter', l, () => map.getCanvas().style.cursor = 'pointer');
   map.on('mouseleave', l, () => map.getCanvas().style.cursor = '');
@@ -790,6 +821,91 @@ el('search').addEventListener('keydown', e => {
 });
 
 // ── lifecycle ───────────────────────────────────────────────────────────────
+// ── overlays (points of interest) ───────────────────────────────────────────
+// Reconnaissance targets from OpenStreetMap plus a curated set, published as
+// /data/overlays.geojson. Loaded on first open, drawn as one circle layer whose
+// filter is the set of enabled categories.
+const OV_CATS = [
+  { k: 'airbases',  label: 'Military airbases',      color: '#4d9fff' },
+  { k: 'silos',     label: 'ICBM / missile sites',   color: '#ff5252' },
+  { k: 'nuclear',   label: 'Nuclear power plants',   color: '#4de08a' },
+  { k: 'naval',     label: 'Naval bases',            color: '#40c4d6' },
+  { k: 'spaceport', label: 'Spaceports / launch',    color: '#ffd54d' },
+  { k: 'testsite',  label: 'Nuclear test sites',     color: '#e879f9' },
+];
+const OV_LABEL = Object.fromEntries(OV_CATS.map(c => [c.k, c.label]));
+const ovOn = new Set();
+let ovLoaded = false, ovLoading = null;
+
+function ovApply(){
+  const on = [...ovOn];
+  const filt = on.length ? ['in', ['get','k'], ['literal', on]]
+                         : ['==', ['get','k'], '__none__'];
+  if (map.getLayer('ov-pts')) map.setFilter('ov-pts', filt);
+  for (const c of OV_CATS){
+    const row = document.querySelector(`.ov-row[data-k="${c.k}"]`);
+    if (row) row.classList.toggle('on', ovOn.has(c.k));
+  }
+}
+
+function ovLoad(){
+  if (ovLoaded) return Promise.resolve();
+  if (ovLoading) return ovLoading;
+  ovLoading = fetch('/data/overlays.geojson')
+    .then(r => { if (!r.ok) throw new Error('overlays ' + r.status); return r.json(); })
+    .then(gj => {
+      const counts = {};
+      for (const f of gj.features){ const k = f.properties && f.properties.k;
+        if (k) counts[k] = (counts[k] || 0) + 1; }
+
+      if (!map.getSource('ov')) map.addSource('ov', { type: 'geojson', data: gj });
+      if (!map.getLayer('ov-pts')){
+        const colour = ['match', ['get','k']];
+        for (const c of OV_CATS){ colour.push(c.k, c.color); }
+        colour.push('#8b98a9');
+        map.addLayer({ id: 'ov-pts', type: 'circle', source: 'ov',
+          filter: ['==', ['get','k'], '__none__'],
+          paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 2, 3, 7, 5.5],
+                   'circle-color': colour, 'circle-stroke-color': '#0b0e13',
+                   'circle-stroke-width': 1.2, 'circle-opacity': 0.92 } });
+        map.on('click', 'ov-pts', e => {
+          const p = e.features[0].properties;
+          new maplibregl.Popup({ maxWidth: '240px' }).setLngLat(e.lngLat)
+            .setHTML('<div class="pp-body"><div class="pp-id">' + p.n + '</div>' +
+              '<div class="pp-row"><span>Type</span><span>' +
+              (OV_LABEL[p.k] || p.k) + '</span></div></div>').addTo(map);
+        });
+        map.on('mouseenter', 'ov-pts', () => map.getCanvas().style.cursor = 'pointer');
+        map.on('mouseleave', 'ov-pts', () => map.getCanvas().style.cursor = '');
+      }
+
+      const list = el('ov-list'); list.innerHTML = '';
+      for (const c of OV_CATS){
+        const row = document.createElement('div');
+        row.className = 'ov-row' + (ovOn.has(c.k) ? ' on' : '');
+        row.dataset.k = c.k;
+        row.innerHTML = `<span class="dot" style="background:${c.color}"></span>` +
+          `<span class="nm">${c.label}</span>` +
+          `<span class="ct">${(counts[c.k] || 0).toLocaleString()}</span>`;
+        row.addEventListener('click', () => {
+          ovOn.has(c.k) ? ovOn.delete(c.k) : ovOn.add(c.k);
+          ovApply();
+        });
+        list.appendChild(row);
+      }
+      ovLoaded = true;
+      ovApply();
+    })
+    .catch(e => { console.warn('overlays unavailable:', e); toast('Overlays unavailable'); ovLoading = null; });
+  return ovLoading;
+}
+
+el('btn-ov').addEventListener('click', () => {
+  const open = el('ovpanel').classList.toggle('open');
+  el('btn-ov').classList.toggle('on', open);
+  if (open) ovLoad();
+});
+
 map.on('load', () => {
   // hash:true will restore a bearing/pitch baked into a shared URL, which the
   // disabled gestures would then leave no way to undo.
