@@ -157,7 +157,8 @@
     <h2 id="side-title">No mission loaded<small id="side-sub">—</small></h2>
     <div id="fbar">
       <div id="cam-chips"></div>
-      <label id="unsc-lbl"><input type="checkbox" id="unsc"> <span id="unsc-txt">Show unscanned frames</span></label>
+      <label id="unsc-lbl" title="Frames USGS hasn't scanned at high resolution — only the low-res browse preview shown here exists, there's no hi-res download.">
+        <input type="checkbox" id="unsc"> <span id="unsc-txt">Show browse-only frames</span></label>
     </div>
     <div id="minimap"></div>
     <div id="mini-cred">© OpenStreetMap · © CARTO</div>
@@ -433,15 +434,15 @@ function buildFilters(){
       box.appendChild(b);
     }
   }
-  // Most scanned missions (all of HEXAGON, most GAMBIT) have no unscanned
-  // frames at all, so the toggle would do nothing with no hint why. Say how
-  // many there are, and disable it when there are none.
+  // "Browse only" = USGS has no high-res scan to download, just the preview.
+  // Most fully-scanned missions (all of HEXAGON, most GAMBIT) have none, so the
+  // toggle would do nothing with no hint why — show the count, disable at zero.
   const nUn = cur.frames.reduce((n, f) => n + (f[F.SCANNED] ? 0 : 1), 0);
   el('unsc').disabled = nUn === 0;
   el('unsc-lbl').classList.toggle('disabled', nUn === 0);
   el('unsc-txt').innerHTML = nUn === 0
-    ? 'No unscanned frames here'
-    : `Show unscanned frames <b>(${nUn.toLocaleString()})</b>`;
+    ? 'Every frame has a hi-res download'
+    : `Show browse-only frames <b>(${nUn.toLocaleString()})</b>`;
   el('unsc').checked = showUnscanned && nUn > 0;
 }
 
@@ -530,7 +531,7 @@ function show(i){
     ['Satellite', `<span class="v">${cur.satellite}</span>`],
     ['Mission', `<span class="v">${cur.mission}</span>`],
     ['Camera', `<span class="v">${f[F.CAM] || '—'}</span>`],
-    ['Scanned', `<span class="v">${f[F.SCANNED] ? 'yes' : 'not scanned'}</span>`],
+    ['Hi-res download', `<span class="v">${f[F.SCANNED] ? 'available' : 'none — browse only'}</span>`],
   ].map(([k, v]) => `<div><div class="k">${k}</div>${v}</div>`).join('');
 
   el('ee').href = `https://earthexplorer.usgs.gov/scene/metadata/full/${

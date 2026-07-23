@@ -144,9 +144,9 @@
 
 <div id="filters">
   <div class="row"><span class="sw" style="background:#f0b429"></span>
-    <label for="f-scanned">Scanned</label><input type="checkbox" id="f-scanned" checked></div>
+    <label for="f-scanned" title="A high-resolution scan is available to download from USGS">Hi-res download</label><input type="checkbox" id="f-scanned" checked></div>
   <div class="row"><span class="sw" style="background:#8b5cf6"></span>
-    <label for="f-unscanned">Not scanned</label><input type="checkbox" id="f-unscanned" checked></div>
+    <label for="f-unscanned" title="No high-res scan — only a low-res browse preview exists on USGS">Browse only</label><input type="checkbox" id="f-unscanned" checked></div>
 
   <div class="row"><span class="sw" style="background:#3f4b5b"></span>
     <label for="f-unpub">Hide published</label><input type="checkbox" id="f-unpub"></div>
@@ -679,7 +679,7 @@ function renderSidebar(){
       + p.entityId + '</div>'
       + '<div class="m">' + String(p.acquisitionDate||'').slice(0,10) + ' · '
       + (p.satellite||'') + ' · mission ' + (p.mission||'—')
-      + (un ? ' · not scanned' : '') + '</div></div>';
+      + (un ? ' · browse only' : '') + '</div></div>';
   }).join('');
   el('sb-more').style.display = rows.length > sbShown ? '' : 'none';
 
@@ -717,7 +717,7 @@ function popupHtml(p){
     + row('Satellite', p.satellite)
     + row('Mission', p.mission)
     + row('Camera', p.camera)
-    + row('Status', un ? 'Not scanned' : 'Scanned')
+    + row('Hi-res download', un ? 'none — browse only' : 'available')
     + row('Available', String(p.firstSeenAvailable||'').slice(0,10))
     + '<div class="pp-links"><a href="'+eeUrl(p)+'" target="_blank" rel="noopener">'
     + 'EarthExplorer ↗</a>'
