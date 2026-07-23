@@ -93,6 +93,8 @@
   .fchip:hover{border-color:#3d4b5c}
   .fchip.on{color:var(--ink);border-color:#6c5ce7;background:#6c5ce71a}
   #unsc-lbl{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--dim);cursor:pointer}
+  #unsc-lbl.disabled{opacity:.5;cursor:default}
+  #unsc-txt b{color:var(--un)}
   #minimap{height:150px;position:relative;background:#080b0f}
   #minimap canvas{cursor:default}
   #mini-cred{font-size:9px;color:#5c6773;padding:2px 14px;border-bottom:1px solid var(--edge);
@@ -155,7 +157,7 @@
     <h2 id="side-title">No mission loaded<small id="side-sub">—</small></h2>
     <div id="fbar">
       <div id="cam-chips"></div>
-      <label id="unsc-lbl"><input type="checkbox" id="unsc"> Show unscanned frames</label>
+      <label id="unsc-lbl"><input type="checkbox" id="unsc"> <span id="unsc-txt">Show unscanned frames</span></label>
     </div>
     <div id="minimap"></div>
     <div id="mini-cred">© OpenStreetMap · © CARTO</div>
@@ -431,7 +433,16 @@ function buildFilters(){
       box.appendChild(b);
     }
   }
-  el('unsc').checked = showUnscanned;
+  // Most scanned missions (all of HEXAGON, most GAMBIT) have no unscanned
+  // frames at all, so the toggle would do nothing with no hint why. Say how
+  // many there are, and disable it when there are none.
+  const nUn = cur.frames.reduce((n, f) => n + (f[F.SCANNED] ? 0 : 1), 0);
+  el('unsc').disabled = nUn === 0;
+  el('unsc-lbl').classList.toggle('disabled', nUn === 0);
+  el('unsc-txt').innerHTML = nUn === 0
+    ? 'No unscanned frames here'
+    : `Show unscanned frames <b>(${nUn.toLocaleString()})</b>`;
+  el('unsc').checked = showUnscanned && nUn > 0;
 }
 
 function computeVisible(){
