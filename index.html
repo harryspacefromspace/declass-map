@@ -585,7 +585,7 @@ body{
 
 <div id="header">
   <h1>🛰 Declassified Satellite <span>Available Downloads</span></h1>
-  <div id="stats"><span class="dot" style="background:#00ff88"></span>Declass I: <strong>40,236</strong> &nbsp;|&nbsp; <span class="dot" style="background:#00aaff"></span>Declass II: <strong>46,699</strong> &nbsp;|&nbsp; <span class="dot" style="background:#ff9900"></span>Declass III: <strong>21,138</strong> &nbsp;·&nbsp; Updated <strong>2026-07-22</strong></div>
+  <div id="stats"><span class="dot" style="background:#00ff88"></span>Declass I: <strong>146,115</strong> &nbsp;|&nbsp; <span class="dot" style="background:#00aaff"></span>Declass II: <strong>46,699</strong> &nbsp;|&nbsp; <span class="dot" style="background:#ff9900"></span>Declass III: <strong>21,138</strong> &nbsp;·&nbsp; Updated <strong>2026-07-21</strong></div>
   <div id="search-wrap">
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
     <input id="search" type="text" placeholder="Search entity ID or lat, lon…" autocomplete="off" />
@@ -764,6 +764,10 @@ body{
   <div id="ov-panel">
     <button class="ov-btn" data-ov="airbases"><span class="ov-icon">✈</span>Military Airbases<span class="ov-badge" id="badge-airbases"></span></button>
     <button class="ov-btn" data-ov="silos"><span class="ov-icon">🚀</span>ICBM / Missile Sites<span class="ov-badge" id="badge-silos"></span></button>
+    <button class="ov-btn" data-ov="nuclear"><span class="ov-icon">☢️</span>Nuclear Power Plants<span class="ov-badge" id="badge-nuclear"></span></button>
+    <button class="ov-btn" data-ov="naval"><span class="ov-icon">⚓</span>Naval Bases<span class="ov-badge" id="badge-naval"></span></button>
+    <button class="ov-btn" data-ov="spaceport"><span class="ov-icon">🛰️</span>Spaceports / Launch<span class="ov-badge" id="badge-spaceport"></span></button>
+    <button class="ov-btn" data-ov="testsite"><span class="ov-icon">💥</span>Nuclear Test Sites<span class="ov-badge" id="badge-testsite"></span></button>
   </div>
 
   <!-- USGS status -->
@@ -2346,8 +2350,15 @@ const CW_AIRBASES = [
 // toggle to render zero extra markers. OSM tags these properly.
 const OVERLAY_URL = '/data/overlays.geojson';
 
+// Every overlay category the data file may carry. airbases/silos also have a
+// curated Cold War list merged in; the rest come straight from overlays.geojson
+// (OSM, plus the curated test sites baked in by fetch_overlays.py).
+const OV_CATS   = ['airbases', 'silos', 'nuclear', 'naval', 'spaceport', 'testsite'];
+const OV_COLORS = {airbases:'#4d9fff', silos:'#ff4d4d', nuclear:'#4de08a',
+                   naval:'#40c4d6', spaceport:'#ffd54d', testsite:'#e879f9'};
+
 const ovLayers = {};
-let overlayCache = null;      // {airbases:[...], silos:[...]} once loaded
+let overlayCache = null;      // {airbases:[...], silos:[...], ...} once loaded
 let overlayPromise = null;    // in-flight fetch, so two clicks share one request
 
 function loadOverlayData() {
@@ -2360,7 +2371,8 @@ function loadOverlayData() {
       return r.json();
     })
     .then(gj => {
-      const byKind = {airbases: [], silos: []};
+      const byKind = {};
+      for (const k of OV_CATS) byKind[k] = [];
       for (const f of gj.features || []) {
         const k = f.properties && f.properties.k;
         const c = f.geometry && f.geometry.coordinates;
@@ -2380,9 +2392,14 @@ function loadOverlayData() {
   return overlayPromise;
 }
 
+// Only airbases and silos have curated Cold War lists; the rest are OSM (or,
+// for test sites, curated inside overlays.geojson) so they merge against [].
+function curatedFor(key) {
+  return key === 'silos' ? CW_SILOS : key === 'airbases' ? CW_AIRBASES : [];
+}
+
 function ovMarker(lat, lon, name, key) {
-  const colors = {silos:'#ff4d4d', airbases:'#4d9fff'};
-  const c = colors[key] || '#aaa';
+  const c = OV_COLORS[key] || '#aaa';
   return L.circleMarker([lat, lon], {
     radius:5, color:c, fillColor:c, fillOpacity:.75, weight:1.5, opacity:.9
   }).bindPopup(
@@ -2419,9 +2436,8 @@ async function toggleOverlay(key) {
   if (btn) { btn.disabled = true; btn.style.opacity = '0.5'; }
 
   try {
-    const curated = key === 'silos' ? CW_SILOS : CW_AIRBASES;
     const data = await loadOverlayData();
-    const points = mergeSites(curated, data && data[key]);
+    const points = mergeSites(curatedFor(key), data && data[key]);
 
     const layer = L.layerGroup(points.map(p => ovMarker(p.lat, p.lon, p.n, key)));
     layer.addTo(map);
@@ -2443,16 +2459,15 @@ async function toggleOverlay(key) {
 // Show how many sites each layer holds before it's switched on — an empty
 // badge just reads as a broken button.
 function refreshOvBadges() {
-  for (const key of ['airbases', 'silos']) {
+  for (const key of OV_CATS) {
     const badge = document.getElementById(`badge-${key}`);
     if (!badge) continue;
     if (ovLayers[key]) {
       badge.textContent = ovLayers[key].getLayers().length.toLocaleString();
       continue;
     }
-    const curated = key === 'silos' ? CW_SILOS : CW_AIRBASES;
     badge.textContent = overlayCache
-      ? mergeSites(curated, overlayCache[key]).length.toLocaleString()
+      ? mergeSites(curatedFor(key), overlayCache[key]).length.toLocaleString()
       : '·';
   }
 }
