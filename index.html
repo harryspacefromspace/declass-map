@@ -585,7 +585,7 @@ body{
 
 <div id="header">
   <h1>🛰 Declassified Satellite <span>Available Downloads</span></h1>
-  <div id="stats"><span class="dot" style="background:#00ff88"></span>Declass I: <strong>40,302</strong> &nbsp;|&nbsp; <span class="dot" style="background:#00aaff"></span>Declass II: <strong>46,699</strong> &nbsp;|&nbsp; <span class="dot" style="background:#ff9900"></span>Declass III: <strong>21,378</strong> &nbsp;·&nbsp; Updated <strong>2026-08-29</strong></div>
+  <div id="stats"><span class="dot" style="background:#00ff88"></span>Declass I: <strong>40,302</strong> &nbsp;|&nbsp; <span class="dot" style="background:#00aaff"></span>Declass II: <strong>46,699</strong> &nbsp;|&nbsp; <span class="dot" style="background:#ff9900"></span>Declass III: <strong>21,378</strong> &nbsp;·&nbsp; Updated <strong>2026-08-30</strong></div>
   <div id="search-wrap">
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
     <input id="search" type="text" placeholder="Search entity ID or lat, lon…" autocomplete="off" />
@@ -865,8 +865,8 @@ const AVAIL_SEED = "2026-02-20";  // backfill date; firstSeen == this means "ava
 const map = L.map('map', {center:[35,30], zoom:2, preferCanvas:true, zoomControl:true});
 
 const BASEMAPS = {
-  dark:      L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
-               {attribution:'© Esri, HERE, Garmin, © OpenStreetMap contributors', maxZoom:19, maxNativeZoom:16}),
+  dark:      L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+               {attribution:'© CartoDB © OpenStreetMap', subdomains:'abcd', maxZoom:19}),
   satellite: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
                {attribution:'© Esri © USGS', maxZoom:19}),
   hybrid:    [
@@ -890,7 +890,7 @@ let pendingGlobePov = null;   // view restored from the URL, applied once the gl
 // The globe can draw the same slippy tiles as the flat map, which is far
 // sharper than a single 2048x1024 texture for the whole planet.
 const GLOBE_TILES = {
-  dark:      (x, y, l) => `https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/${l}/${y}/${x}`,
+  dark:      (x, y, l) => `https://${'abcd'[Math.abs(x + y) % 4]}.basemaps.cartocdn.com/dark_all/${l}/${x}/${y}.png`,
   satellite: (x, y, l) => `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${l}/${y}/${x}`,
   hybrid:    (x, y, l) => `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${l}/${y}/${x}`,
   osm:       (x, y, l) => `https://${'abc'[Math.abs(x + y) % 3]}.tile.openstreetmap.org/${l}/${x}/${y}.png`
