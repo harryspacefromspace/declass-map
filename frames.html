@@ -6,6 +6,7 @@
 <title>Frame browser — declassified imagery</title>
 <link href="vendor/maplibre-gl.css" rel="stylesheet">
 <script src="vendor/maplibre-gl.js"></script>
+<script src="vendor/pmtiles.js"></script>
 <style>
   :root{--bg:#0b0e13;--panel:#11161e;--edge:#2a3441;--ink:#e6edf3;--dim:#8b98a9;
         --hi:#f0b429;--un:#a78bfa;--chip:#1a2029}
@@ -117,6 +118,100 @@
          font-size:12px;display:none}
   kbd{background:#1a2029;border:1px solid var(--edge);border-radius:3px;padding:0 4px;
       font-size:10.5px;font-family:inherit;color:var(--dim)}
+
+  /* AOI search overlay */
+  #aoi-overlay{position:fixed;inset:0;z-index:8;background:var(--bg);display:none;
+               flex-direction:column}
+  #aoi-overlay.open{display:flex}
+  #aoi-bar{display:flex;gap:8px;align-items:center;padding:9px 12px;flex-wrap:wrap;
+           border-bottom:1px solid var(--edge);background:#0d1118}
+  #aoi-bar .spacer{flex:1}
+  #aoi-unsc-lbl{display:flex;align-items:center;gap:6px;color:var(--dim);
+                font-size:12px;cursor:pointer}
+  #aoi-bm{display:flex;border:1px solid var(--edge);border-radius:8px;overflow:hidden}
+  #aoi-bm button{background:var(--chip);border:0;border-right:1px solid var(--edge);
+                 color:var(--dim);padding:6px 10px;font:inherit;font-size:12.5px;cursor:pointer}
+  #aoi-bm button:last-child{border-right:0}
+  #aoi-bm button.on{background:#1f2937;color:var(--ink)}
+  #aoi-note{color:var(--dim);font-size:11.5px}
+  #aoi-map-wrap{display:none;flex:1;position:relative;min-height:0}
+  #aoi-map-wrap.show{display:block}
+  #aoi-map{position:absolute;inset:0}
+  #aoi-rect{position:absolute;border:1.5px solid var(--hi);background:#f0b42922;
+            pointer-events:none;display:none}
+  #aoi-search{flex:1;min-width:150px;max-width:260px;cursor:text}
+
+  /* results rail — the side list carrying thumbnails while browsing a search.
+     A 16:1 frame at rail width would be 20px tall, so the thumb is a centre
+     crop: object-fit cover keeps the full height and trims the ends, which
+     leaves roughly the middle third of the ground track legible. */
+  #rail-ctl{padding:7px 14px;border-bottom:1px solid var(--edge);display:none;gap:5px;
+            align-items:center}
+  #rail-ctl.show{display:flex}
+  #rail-ctl .sp{flex:1}
+  .row.rrow{display:block;padding:8px 10px}
+  .rthumb{width:100%;height:52px;background:#11161e;border-radius:4px;overflow:hidden;
+          border:1px solid var(--edge)}
+  .rthumb img{width:100%;height:100%;object-fit:cover;object-position:center;display:block}
+  .row.rrow.on .rthumb{border-color:var(--hi)}
+  .rmeta{display:flex;align-items:center;gap:6px;margin-top:5px}
+  .rdot{width:6px;height:6px;border-radius:50%;flex:none;background:var(--hi)}
+  .rrow.un .rdot{background:var(--un)}
+  .rdate{font-size:11.5px;color:var(--ink);font-variant-numeric:tabular-nums}
+  .rsub{font-size:10.5px;color:var(--dim);margin-left:auto}
+  .rid{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:9.5px;
+       color:#5c6773;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+  /* top bar context block, shown only while browsing a search */
+  #ctx{display:none;align-items:center;gap:9px;min-width:0}
+  #ctx.show{display:flex}
+  #ctx-t{font-size:12px;color:var(--ink);white-space:nowrap}
+  #ctx-s{font-size:11px;color:var(--dim);white-space:nowrap}
+
+  /* grid overlay — every hit at once, for scanning rather than stepping.
+     Cells are wide and short because the frames are: at 280px a 16:1 frame is
+     17px tall, so the thumb is a centre crop like the rail's, just wider. */
+  #grid-overlay{position:fixed;inset:0;z-index:8;background:var(--bg);display:none;
+                flex-direction:column}
+  #grid-overlay.open{display:flex}
+  #grid-bar{display:flex;gap:8px;align-items:center;padding:9px 12px;flex-wrap:wrap;
+            border-bottom:1px solid var(--edge);background:#0d1118}
+  #grid-bar .spacer{flex:1}
+  #grid-wrap{flex:1;overflow-y:auto;padding:16px}
+  #grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px}
+  .gcell{border:1px solid var(--edge);border-radius:8px;overflow:hidden;background:#0b0e13;
+         cursor:pointer;display:flex;flex-direction:column}
+  .gcell:hover{border-color:#3d4b5c}
+  .gcell.on{border-color:var(--hi)}
+  .gcell .gimg{width:100%;height:64px;object-fit:cover;object-position:center;
+               background:#11161e;display:block;border-bottom:1px solid var(--edge)}
+  .gcell .gbody{padding:7px 9px}
+  .gcell .gtop{display:flex;align-items:center;gap:6px}
+  .gcell .gdot{width:7px;height:7px;border-radius:50%;flex:none;background:var(--hi)}
+  .gcell.un .gdot{background:var(--un)}
+  .gcell .gdate{font-size:11.5px;color:var(--ink);font-variant-numeric:tabular-nums}
+  .gcell .gsub{font-size:10.5px;color:var(--dim);margin-left:auto}
+  .gcell .gid{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:9.5px;
+              color:#5c6773;margin-top:2px;overflow:hidden;text-overflow:ellipsis;
+              white-space:nowrap}
+  #grid-more{display:none;margin:16px auto 4px}
+
+  /* download panel — confirm, then progress, in the same box */
+  #dl{position:absolute;right:16px;bottom:16px;z-index:3;width:330px;display:none;
+      background:var(--panel);border:1px solid var(--edge);border-radius:10px;
+      padding:13px 15px;box-shadow:0 10px 34px #000a}
+  #dl.show{display:block}
+  #dl h3{margin:0 0 5px;font-size:12.5px;font-weight:600}
+  #dl p{margin:0 0 11px;font-size:11.5px;color:var(--dim);line-height:1.45}
+  #dl p b{color:var(--ink);font-weight:500}
+  #dl .warn{color:var(--un)}
+  #dl-bar{height:7px;background:#0b0e13;border:1px solid var(--edge);border-radius:4px;
+          overflow:hidden;margin-bottom:11px;display:none}
+  #dl-bar.show{display:block}
+  #dl-bar i{display:block;height:100%;width:0;background:var(--hi);
+            transition:width .25s linear}
+  #dl-act{display:flex;gap:7px}
+  #dl-act .ctl{flex:1}
 </style>
 </head>
 <body>
@@ -129,6 +224,12 @@
   <button class="ctl" id="prev" disabled>← Prev</button>
   <button class="ctl" id="next" disabled>Next →</button>
   <button class="ctl" id="lock" title="Keep the same zoom & position when stepping frames">🔒 Lock zoom</button>
+  <button class="ctl" id="btn-aoi">🔎 Search area</button>
+  <div id="ctx">
+    <button class="ctl" id="ctx-grid" title="See every result at once (G)">⊞ Grid</button>
+    <span id="ctx-t"></span><span id="ctx-s"></span>
+    <button class="ctl" id="ctx-copy">Copy link</button>
+  </div>
   <div class="spacer"></div>
   <span style="color:var(--dim);font-size:11px">
     <kbd>←</kbd> <kbd>→</kbd> to step · scroll to zoom</span>
@@ -161,10 +262,16 @@
         <input type="checkbox" id="unsc"> <span id="unsc-txt">Show browse-only frames</span></label>
     </div>
     <div id="minimap"></div>
-    <div id="mini-cred">© OpenStreetMap · © CARTO</div>
+    <div id="mini-cred">© Esri · © OpenStreetMap</div>
     <div id="jump">
       <input class="ctl" id="jump-n" type="number" min="1" placeholder="frame #">
       <button class="ctl" id="jump-go">Go</button>
+    </div>
+    <div id="rail-ctl">
+      <button class="fchip on" id="rail-thumbs">Thumbs</button>
+      <button class="fchip" id="rail-list">List</button>
+      <span class="sp"></span>
+      <span style="font-size:10.5px;color:#5c6773">oldest first</span>
     </div>
     <div id="list"></div>
   </aside>
@@ -172,6 +279,54 @@
 
 </div>
 <div id="toast"></div>
+
+<div id="aoi-overlay">
+  <div id="aoi-bar">
+    <div id="brand">Search area <span id="aoi-sub">draw a box to find frames</span></div>
+    <button class="ctl" id="aoi-draw">Draw box</button>
+    <button class="ctl" id="aoi-clear">Clear</button>
+    <button class="ctl on" id="aoi-fp" title="Hide the footprint outlines to see the basemap underneath — the search still finds them">Footprints</button>
+    <div class="seg" id="aoi-bm">
+      <button data-bm="hybrid" class="on">Hybrid</button>
+      <button data-bm="satellite">Satellite</button>
+      <button data-bm="dark">Dark</button>
+      <button data-bm="osm">OSM</button>
+    </div>
+    <label id="aoi-unsc-lbl"><input type="checkbox" id="aoi-unsc"> Include browse-only frames</label>
+    <input class="ctl" id="aoi-search" placeholder="Place, or lat, lon" autocomplete="off">
+    <div class="spacer"></div>
+    <span id="aoi-note"></span>
+    <button class="ctl" id="aoi-close">✕ Close</button>
+  </div>
+  <div id="aoi-map-wrap" class="show">
+    <div id="aoi-map"></div>
+    <div id="aoi-rect"></div>
+  </div>
+</div>
+
+<div id="grid-overlay">
+  <div id="grid-bar">
+    <div id="brand">Results grid <span id="grid-sub">—</span></div>
+    <div class="spacer"></div>
+    <span style="color:var(--dim);font-size:11px">click a frame to open it</span>
+    <button class="ctl" id="dl-csv" title="Metadata for these frames as a spreadsheet">⬇ CSV</button>
+    <button class="ctl" id="dl-all" title="Every preview image in this grid, plus metadata, as one ZIP">⬇ Download all</button>
+    <button class="ctl" id="grid-close">✕ Close</button>
+  </div>
+  <div id="grid-wrap">
+    <div id="grid"></div>
+    <button class="ctl" id="grid-more">Load more</button>
+  </div>
+  <div id="dl">
+    <h3 id="dl-h">Download all</h3>
+    <p id="dl-p"></p>
+    <div id="dl-bar"><i></i></div>
+    <div id="dl-act">
+      <button class="ctl" id="dl-go">Start</button>
+      <button class="ctl" id="dl-cancel">Cancel</button>
+    </div>
+  </div>
+</div>
 
 <script>
 const el = id => document.getElementById(id);
@@ -209,12 +364,19 @@ const cache = new Map();
 // same-origin (and caches them at our edge). browsePrefix is the full USGS
 // URL; keep only the path after the host.
 const PROXY = '/img/';
+// Mission files store a tail to join to the mission's prefix; AOI search
+// results come out of the vector tiles with the whole URL already. Either way
+// what the proxy wants is the path.
 const browseUrl = tail => {
-  const p = (cur.browsePrefix + tail).replace(/^https?:\/\/[^/]+\//, '');
-  return PROXY + p;
+  const full = /^https?:\/\//.test(tail) ? tail : cur.browsePrefix + tail;
+  return PROXY + full.replace(/^https?:\/\/[^/]+\//, '');
 };
 
-const F = {ID:0, DATE:1, BROWSE:2, CAM:3, SCANNED:4, LON:5, LAT:6};
+// SAT/MIS/DS are only filled in for AOI search results, where every frame can
+// come from a different mission — in a real mission file those are properties
+// of the whole document, so the lookups below fall back to it.
+const F = {ID:0, DATE:1, BROWSE:2, CAM:3, SCANNED:4, LON:5, LAT:6,
+           SAT:7, MIS:8, DS:9};
 
 // ── pan / zoom ──────────────────────────────────────────────────────────────
 // The browse images are up to 29332px wide, so at fit-to-view you're seeing a
@@ -364,9 +526,11 @@ function initMini(){
     container: 'minimap', attributionControl: false,
     center: [0, 20], zoom: 0.7, dragRotate: false, pitchWithRotate: false,
     style: { version: 8, sources: {
-      base: { type: 'raster', tileSize: 256,
-        tiles: ['https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
-                'https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png'] },
+      // Carto now watermarks its tiles, so the dark base is Esri Canvas — the
+      // same swap index.html made. Esri reverses the path to {z}/{y}/{x}, and
+      // real Canvas tiles stop at z16.
+      base: { type: 'raster', tileSize: 256, maxzoom: 16,
+        tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}'] },
     }, layers: [{ id: 'base', type: 'raster', source: 'base' }] },
   });
   mini.on('load', () => {
@@ -478,6 +642,7 @@ function updateNav(){
 function onFilterChange(){
   computeVisible();
   renderList();
+  if (el('grid-overlay').classList.contains('open')) renderGrid();
   if (!visible.length){
     el('prev').disabled = el('next').disabled = true;
     el('strip').innerHTML = '';
@@ -524,18 +689,20 @@ function show(i){
   }
 
   el('eid').value = f[F.ID];
+  const ds = f[F.DS] || cur.dataset;
   el('meta').innerHTML = [
     ['Entity ID', `<span class="v id">${f[F.ID]}</span>`],
-    ['Position', `<span class="v">${(i+1).toLocaleString()} of ${cur.frames.length.toLocaleString()}</span>`],
+    ['Position', `<span class="v">${(i+1).toLocaleString()} of ${
+      cur.frames.length.toLocaleString()}${cur.aoi ? ' in this area' : ''}</span>`],
     ['Acquired', `<span class="v">${f[F.DATE] || '—'}</span>`],
-    ['Satellite', `<span class="v">${cur.satellite}</span>`],
-    ['Mission', `<span class="v">${cur.mission}</span>`],
+    ['Satellite', `<span class="v">${f[F.SAT] || cur.satellite}</span>`],
+    ['Mission', `<span class="v">${f[F.MIS] || cur.mission}</span>`],
     ['Camera', `<span class="v">${f[F.CAM] || '—'}</span>`],
     ['Hi-res download', `<span class="v">${f[F.SCANNED] ? 'available' : 'none — browse only'}</span>`],
   ].map(([k, v]) => `<div><div class="k">${k}</div>${v}</div>`).join('');
 
   el('ee').href = `https://earthexplorer.usgs.gov/scene/metadata/full/${
-    EE_IDS[cur.dataset] || cur.dataset}/${f[F.ID]}/`;
+    EE_IDS[ds] || ds}/${f[F.ID]}/`;
   const mapHref = (f[F.LAT] != null)
     ? `/tiles.html#map=9/${f[F.LAT]}/${f[F.LON]}` : '/tiles.html';
   el('onmap').href = mapHref;
@@ -544,7 +711,33 @@ function show(i){
   markActive();
   buildStrip();
   miniShow(f);
-  history.replaceState(null, '', '#' + f[F.ID]);
+  setBarMode();
+  // Browsing search results keeps the search in the URL, so the link you share
+  // mid-browse reopens the same area on the same frame, not a bare frame.
+  history.replaceState(null, '', '#' + (cur.aoi ? aoiHashFor(f[F.ID]) : f[F.ID]));
+}
+
+// The top bar carries two different jobs depending on what you're browsing:
+// looking a frame up by ID, or working through a search. Showing both at once
+// is what buried the way back to the results among eight identical pills.
+function setBarMode(){
+  const aoi = !!(cur && cur.aoi);
+  el('ctx').classList.toggle('show', aoi);
+  el('eid').style.display = aoi ? 'none' : '';
+  el('go').style.display = aoi ? 'none' : '';
+  el('btn-aoi').textContent = aoi ? '🔎 New search' : '🔎 Search area';
+  // The rail is the index in a search, so the filmstrip is a second copy of
+  // it — drop it and give the height back to a frame that has none to spare.
+  el('strip').style.display = aoi ? 'none' : '';
+  el('jump').style.display = aoi ? 'none' : '';
+  if (aoi){
+    const n = cur.frames.length;
+    el('ctx-t').textContent = `${n.toLocaleString()} frame${n === 1 ? '' : 's'} in this area`;
+    el('ctx-s').textContent = aoiBBox
+      ? `${aoiBBox[1].toFixed(2)}°, ${aoiBBox[0].toFixed(2)}° · ` +
+        `${cur.frames[0][F.DATE]} → ${cur.frames[n-1][F.DATE]}`
+      : '';
+  }
 }
 
 // Step within the visible set, so a camera/scanned filter is respected.
@@ -585,9 +778,11 @@ function buildStrip(){
     const c = document.createElement('div');
     c.className = 'cell' + (i === pos ? ' on' : '') + (f[F.SCANNED] ? '' : ' un');
     c.title = `${f[F.ID]} · ${f[F.DATE]}`;
+    // Results span missions and years, so the mission is what tells frames
+    // apart there; within one mission it's the camera that varies.
     c.innerHTML = `<div class="n">${i + 1}</div>` +
-      `<div class="d">${(f[F.DATE] || '').slice(5)}</div>` +
-      `<div class="c">${f[F.CAM] || ''}</div>`;
+      `<div class="d">${cur.aoi ? (f[F.DATE] || '') : (f[F.DATE] || '').slice(5)}</div>` +
+      `<div class="c">${cur.aoi ? (f[F.MIS] ? 'm' + f[F.MIS] : '') : (f[F.CAM] || '')}</div>`;
     c.addEventListener('click', () => show(i));
     strip.appendChild(c);
   }
@@ -598,23 +793,51 @@ function buildStrip(){
 function renderList(){
   const total = cur.frames.length, shown = visible.length;
   const filtered = shown < total;
-  el('side-title').innerHTML = `Mission ${cur.mission}` +
-    `<small id="side-sub">${cur.satellite} · ` +
-    (filtered ? `${shown.toLocaleString()} of ${total.toLocaleString()} frames` :
-                `${total.toLocaleString()} frames`) +
-    ` · ${cur.frames[0][F.DATE]} → ${cur.frames[total-1][F.DATE]}</small>`;
+  const count = filtered ? `${shown.toLocaleString()} of ${total.toLocaleString()} frames`
+                         : `${total.toLocaleString()} frames`;
+  const span = ` · ${cur.frames[0][F.DATE]} → ${cur.frames[total-1][F.DATE]}`;
+  el('side-title').innerHTML = cur.aoi
+    ? `Search results<small id="side-sub">in this area · ${count}${span}</small>`
+    : `Mission ${cur.mission}<small id="side-sub">${cur.satellite} · ${count}${span}</small>`;
   el('jump-n').max = total;
+
+  // The rail only carries thumbnails for a search: a mission's 20,000 frames
+  // would be 20,000 lazy <img>, and the browse images are ~5MB each.
+  el('rail-ctl').classList.toggle('show', !!cur.aoi);
+  const thumbs = cur.aoi && railThumbs;
 
   // Built as one string: 20,000 appendChild calls locked the page for seconds.
   const list = el('list');
   list.innerHTML = visible.map(i => { const f = cur.frames[i];
-    return `<div class="row${f[F.SCANNED] ? '' : ' un'}" data-i="${i}">` +
-      `<span class="i">${f[F.ID]}</span><span class="p">${i + 1}</span></div>`; }).join('');
+    const un = f[F.SCANNED] ? '' : ' un';
+    if (!thumbs)
+      return `<div class="row${un}" data-i="${i}">` +
+        `<span class="i">${f[F.ID]}</span><span class="p">${i + 1}</span></div>`;
+    return `<div class="row rrow${un}" data-i="${i}">` +
+      `<div class="rthumb">${f[F.BROWSE]
+        ? `<img loading="lazy" src="${browseUrl(f[F.BROWSE])}" alt="" onerror="this.remove()">` : ''}</div>` +
+      `<div class="rmeta"><span class="rdot"></span>` +
+      `<span class="rdate">${f[F.DATE] || '—'}</span>` +
+      `<span class="rsub">m${f[F.MIS] || ''} · ${f[F.SAT] || ''}</span></div>` +
+      `<div class="rid">${f[F.ID]}</div></div>`;
+  }).join('');
   list.onclick = e => {
     const row = e.target.closest('.row');
     if (row) show(Number(row.dataset.i));
   };
 }
+
+// Thumbs give you the picture, the compact list gives you density — 107 hits
+// are ~8 rows a screen with thumbnails and ~30 without.
+let railThumbs = true;
+function setRailMode(on){
+  railThumbs = on;
+  el('rail-thumbs').classList.toggle('on', on);
+  el('rail-list').classList.toggle('on', !on);
+  if (cur) { renderList(); markActive(); }
+}
+el('rail-thumbs').addEventListener('click', () => setRailMode(true));
+el('rail-list').addEventListener('click', () => setRailMode(false));
 
 function markActive(){
   const list = el('list');
@@ -643,18 +866,783 @@ el('jump-n').addEventListener('keydown', e => { if (e.key === 'Enter') el('jump-
 document.addEventListener('keydown', e => {
   // Not while typing in the ID box, or arrow keys would move the caret AND the frame.
   if (e.target.tagName === 'INPUT') return;
+  if (el('aoi-overlay').classList.contains('open')) return;
   if (!cur || !visible.length) return;
+  // G toggles the grid, so the whole result set is one key away and back.
+  if ((e.key === 'g' || e.key === 'G') && cur.aoi){
+    e.preventDefault();
+    el('grid-overlay').classList.contains('open') ? closeGrid() : openGrid();
+    return;
+  }
+  if (el('grid-overlay').classList.contains('open')) return;
   if (e.key === 'ArrowLeft'){ e.preventDefault(); step(-1); }
   if (e.key === 'ArrowRight'){ e.preventDefault(); step(1); }
   if (e.key === 'Home') show(visible[0]);
   if (e.key === 'End') show(visible[visible.length - 1]);
 });
 
+// ── AOI search overlay ───────────────────────────────────────────────────────
+// A second, disposable MapLibre map over the whole archive (the same pmtiles
+// tiles.html renders footprints from) so frames can be found by drawing a box
+// instead of already knowing an entity ID. Footprints only render — and so
+// only query — at z>=5, same as tiles.html: below that there's nothing to
+// hit-test, just aggregated cluster counts with no individual geometry.
+const AOI_SRC = location.origin + '/data/scenes.pmtiles';
+const AOI_CAP = 2000;
+const AOI_RASTER = {
+  carto: ['https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}'],
+  esri:  ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
+  esriRef: ['https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}'],
+  osm:   ['https://a.tile.openstreetmap.org/{z}/{x}/{y}.png',
+          'https://b.tile.openstreetmap.org/{z}/{x}/{y}.png'],
+};
+// Esri Canvas has real tiles only to z16 and serves blanks past it, so the
+// dark base caps there and overzooms; imagery goes all the way.
+const aoiRaster = (tiles, maxzoom = 19) => ({type:'raster', tiles, tileSize:256, maxzoom});
+// Hybrid is imagery plus the boundaries/places overlay — two layers, not one,
+// which is why this maps a name to a list.
+const AOI_BM = {dark:['bm-carto'], satellite:['bm-esri'],
+                hybrid:['bm-esri','bm-esriRef'], osm:['bm-osm']};
+let aoiMap = null, aoiProtoAdded = false;
+let aoiDrawing = false, aoiDragging = false, aoiStart = null;
+let aoiRaw = [];            // last query's deduped feature properties
+let aoiBBox = null;         // [w,s,e,n] of the last run query, for Copy link
+let showUnscannedAoi = false;
+let pendingAoiFrame = null; // frame a deep link asked to open once results land
+
+function ensureAoiMap(){
+  if (aoiMap) { aoiMap.resize(); return; }
+  if (!aoiProtoAdded){
+    const proto = new pmtiles.Protocol();
+    maplibregl.addProtocol('pmtiles', proto.tile);
+    proto.add(new pmtiles.PMTiles(AOI_SRC));
+    aoiProtoAdded = true;
+  }
+  // Start over wherever's already open, so drawing a box near the frame you
+  // were just looking at doesn't mean re-finding it on a blank globe first.
+  const f = (cur && pos >= 0) ? cur.frames[pos] : null;
+  const hasLoc = f && f[F.LAT] != null;
+  aoiMap = new maplibregl.Map({
+    container: 'aoi-map', center: hasLoc ? [f[F.LON], f[F.LAT]] : [45, 40],
+    zoom: hasLoc ? 6 : 2.2, maxZoom: 15, dragRotate: false, pitchWithRotate: false,
+    attributionControl: false,
+    style: { version: 8, sources: {
+      bm_carto: aoiRaster(AOI_RASTER.carto, 16), bm_esri: aoiRaster(AOI_RASTER.esri),
+      bm_esriRef: aoiRaster(AOI_RASTER.esriRef), bm_osm: aoiRaster(AOI_RASTER.osm),
+      scenes: { type: 'vector', url: 'pmtiles://' + AOI_SRC, minzoom: 0, maxzoom: 8 },
+    }, layers: [
+      // All four are mounted at once and switched by visibility — swapping the
+      // style instead would tear down the vector layers and re-request every
+      // tile, the same reason tiles.html mounts them this way.
+      { id: 'bm-carto', type: 'raster', source: 'bm_carto',
+        layout: { visibility: 'none' }, paint: { 'raster-opacity': 0.8 } },
+      { id: 'bm-esri', type: 'raster', source: 'bm_esri', paint: { 'raster-opacity': 0.9 } },
+      { id: 'bm-esriRef', type: 'raster', source: 'bm_esriRef', paint: { 'raster-opacity': 0.7 } },
+      { id: 'bm-osm', type: 'raster', source: 'bm_osm',
+        layout: { visibility: 'none' }, paint: { 'raster-opacity': 0.85 } },
+      { id: 'fill', type: 'fill', source: 'scenes', 'source-layer': 'scenes', minzoom: 5,
+        paint: { 'fill-color': ['case', ['==', ['get', 'scanned'], false], '#8b5cf6', '#f0b429'],
+                 'fill-opacity': ['interpolate', ['linear'], ['zoom'], 5, 0.06, 8, 0.12, 12, 0.2] } },
+      { id: 'line', type: 'line', source: 'scenes', 'source-layer': 'scenes', minzoom: 5,
+        paint: { 'line-color': ['case', ['==', ['get', 'scanned'], false], '#a78bfa', '#f6c453'],
+                 'line-width': 0.8 } },
+    ] },
+  });
+  aoiMap.touchZoomRotate.disableRotation();
+  aoiMap.setMaxPitch(0);
+  aoiMap.addControl(new maplibregl.NavigationControl(
+    {visualizePitch:false, showCompass:false}), 'bottom-right');
+  aoiMap.on('zoom', updateAoiDrawGate);
+  updateAoiDrawGate();
+  initAoiDraw();
+}
+
+function setAoiBasemap(name){
+  for (const id of ['bm-carto','bm-esri','bm-esriRef','bm-osm'])
+    aoiMap.setLayoutProperty(id, 'visibility',
+      AOI_BM[name].includes(id) ? 'visible' : 'none');
+  for (const b of el('aoi-bm').children) b.classList.toggle('on', b.dataset.bm === name);
+}
+
+// Footprints hide by going transparent, NOT by visibility:none —
+// queryRenderedFeatures skips layers that aren't visible, so hiding them the
+// obvious way would leave the box drawing over them and finding nothing.
+function setAoiFootprints(on){
+  aoiMap.setPaintProperty('fill', 'fill-opacity', on
+    ? ['interpolate', ['linear'], ['zoom'], 5, 0.06, 8, 0.12, 12, 0.2] : 0);
+  aoiMap.setPaintProperty('line', 'line-opacity', on ? 1 : 0);
+  el('aoi-fp').classList.toggle('on', on);
+}
+
+function updateAoiDrawGate(){
+  const ok = aoiMap.getZoom() >= 5;
+  el('aoi-draw').disabled = !ok;
+  el('aoi-note').textContent = ok ? '' : 'Zoom in to draw — footprints only show past that.';
+}
+
+// ── drawing a box ────────────────────────────────────────────────────────────
+function initAoiDraw(){
+  const wrap = el('aoi-map-wrap'), rect = el('aoi-rect');
+  wrap.addEventListener('pointerdown', e => {
+    if (!aoiDrawing) return;
+    aoiDragging = true;
+    const r = wrap.getBoundingClientRect();
+    aoiStart = [e.clientX - r.left, e.clientY - r.top];
+    rect.style.left = aoiStart[0] + 'px'; rect.style.top = aoiStart[1] + 'px';
+    rect.style.width = '0px'; rect.style.height = '0px';
+    rect.style.display = 'block';
+    wrap.setPointerCapture(e.pointerId);
+  });
+  wrap.addEventListener('pointermove', e => {
+    if (!aoiDragging) return;
+    const r = wrap.getBoundingClientRect();
+    const cx = e.clientX - r.left, cy = e.clientY - r.top;
+    const x0 = Math.min(aoiStart[0], cx), y0 = Math.min(aoiStart[1], cy);
+    rect.style.left = x0 + 'px'; rect.style.top = y0 + 'px';
+    rect.style.width = Math.abs(cx - aoiStart[0]) + 'px';
+    rect.style.height = Math.abs(cy - aoiStart[1]) + 'px';
+  });
+  wrap.addEventListener('pointerup', e => {
+    if (!aoiDragging) return;
+    aoiDragging = false;
+    const r = wrap.getBoundingClientRect();
+    const cx = e.clientX - r.left, cy = e.clientY - r.top;
+    const p1 = [Math.min(aoiStart[0], cx), Math.min(aoiStart[1], cy)];
+    const p2 = [Math.max(aoiStart[0], cx), Math.max(aoiStart[1], cy)];
+    setAoiDrawing(false);
+    if (p2[0] - p1[0] < 6 || p2[1] - p1[1] < 6){ rect.style.display = 'none'; return; }
+    runAoiQuery(p1, p2);
+  });
+}
+function setAoiDrawing(on){
+  aoiDrawing = on;
+  el('aoi-draw').classList.toggle('on', on);
+  el('aoi-map-wrap').style.cursor = on ? 'crosshair' : '';
+  aoiMap.dragPan[on ? 'disable' : 'enable']();
+}
+
+// The tiles carry no centroid of their own, so the minimap dot and the "show
+// on map" link are averaged off the footprint's corners. A footprint clipped
+// at a tile edge averages only the piece we kept, which moves the dot a little
+// — same order of rough as the stored centroids the mission files use.
+function ringCentroid(geom){
+  const ring = geom.type === 'MultiPolygon' ? geom.coordinates[0][0] : geom.coordinates[0];
+  // Rings close by repeating the first vertex; counting it twice skews the mean.
+  const n = (ring.length > 1 &&
+             ring[0][0] === ring[ring.length-1][0] &&
+             ring[0][1] === ring[ring.length-1][1]) ? ring.length - 1 : ring.length;
+  let x = 0, y = 0;
+  for (let k = 0; k < n; k++){ x += ring[k][0]; y += ring[k][1]; }
+  return [x / n, y / n];
+}
+
+// A footprint spanning several tiles comes back once per tile — dedupe by
+// entityId, same fix tiles.html applies to its own on-screen count.
+function runAoiQuery(p1, p2){
+  const w1 = aoiMap.unproject(p1), w2 = aoiMap.unproject(p2);
+  aoiBBox = [Math.min(w1.lng, w2.lng), Math.min(w1.lat, w2.lat),
+             Math.max(w1.lng, w2.lng), Math.max(w1.lat, w2.lat)];
+  const seen = new Set(); aoiRaw = [];
+  for (const feat of aoiMap.queryRenderedFeatures([p1, p2], { layers: ['fill'] })){
+    const id = feat.properties.entityId;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const c = ringCentroid(feat.geometry);
+    aoiRaw.push(Object.assign({}, feat.properties, { lon: c[0], lat: c[1] }));
+  }
+  // Oldest first: a box over one target reads as that target's history, so the
+  // order the frames were taken in is the order worth seeing them in.
+  aoiRaw.sort((a, b) => String(a.acquisitionDate || '').localeCompare(String(b.acquisitionDate || '')));
+  if (aoiRaw.length > AOI_CAP){
+    toast(`${aoiRaw.length.toLocaleString()} frames in that box — narrow it (max ${AOI_CAP.toLocaleString()} at once).`);
+    el('aoi-rect').style.display = 'none';
+    return;
+  }
+  if (!aoiFiltered().length){
+    toast(showUnscannedAoi
+      ? 'No frames in that box — try a different area.'
+      : 'No hi-res frames there — tick "include browse-only" and draw again.');
+    return;
+  }
+  // Straight into the workbench: the rail is the result list, so there's no
+  // separate results page to stop at on the way.
+  const id = pendingAoiFrame;
+  pendingAoiFrame = null;
+  browseAoiResults(id);
+}
+
+function runAoiFromBBox(w, s, e, n){
+  aoiMap.fitBounds([[w, s], [e, n]], { padding: 24, animate: false });
+  aoiMap.once('idle', () => {
+    if (aoiMap.getZoom() < 5){
+      toast('That area is too large to list frames — zoom in or draw a smaller box.');
+      return;
+    }
+    const p1 = aoiMap.project([w, n]), p2 = aoiMap.project([e, s]);
+    runAoiQuery([p1.x, p1.y], [p2.x, p2.y]);
+  });
+}
+
+// ── results ─────────────────────────────────────────────────────────────────
+const aoiFiltered = () => showUnscannedAoi
+  ? aoiRaw : aoiRaw.filter(p => p.scanned !== false && p.scanned !== 'false');
+
+// ── browsing the results full size ──────────────────────────────────────────
+// The viewer navigates a mission document, so the results are handed to it as
+// one: a synthetic mission whose frames are the hits, in the order the grid
+// shows them. Everything downstream — stepping, the filmstrip, the side list,
+// the minimap, neighbour prefetching — then works untouched, and prev/next
+// stays inside the search because the search IS the document.
+//
+// The rows come from the vector tiles, which carry everything a frame record
+// needs, so no per-mission file has to be fetched to page through hits that
+// span forty missions.
+const resultToFrame = p => {
+  const rec = [p.entityId, String(p.acquisitionDate || '').slice(0, 10), p.browse,
+               p.camera || '', p.scanned !== false && p.scanned !== 'false',
+               p.lon, p.lat];
+  rec[F.SAT] = p.satellite; rec[F.MIS] = p.mission; rec[F.DS] = p.dataset;
+  return rec;
+};
+
+function browseAoiResults(startId){
+  const rows = aoiFiltered();
+  if (!rows.length) return;
+  cur = { aoi: true, mission: '—', dataset: null, satellite: 'Search results',
+          browsePrefix: '', frames: rows.map(resultToFrame) };
+  // Keep the sidebar's own browse-only toggle agreeing with the one that
+  // produced these rows, or it would open already contradicting itself.
+  showUnscanned = showUnscannedAoi;
+  buildFilters();
+  computeVisible();
+  renderList();
+  miniSetMission();
+  closeAoiOverlay();
+  const i = rows.findIndex(p => p.entityId === startId);
+  show(i >= 0 ? i : (visible.length ? visible[0] : 0));
+}
+
+// ── results grid ────────────────────────────────────────────────────────────
+// The rail is for working along a search a frame at a time; the grid is for
+// taking it all in at once. Both read `visible`, so the camera and browse-only
+// filters apply to each identically and the grid can't disagree with prev/next.
+const GRID_PAGE = 60;
+let gridShown = GRID_PAGE;
+
+function renderGrid(){
+  const grid = el('grid');
+  const slice = visible.slice(0, gridShown);
+  el('grid-sub').textContent = `${visible.length.toLocaleString()} frame` +
+    `${visible.length === 1 ? '' : 's'}` +
+    (visible.length ? ` · ${cur.frames[visible[0]][F.DATE]} → ` +
+                      `${cur.frames[visible[visible.length-1]][F.DATE]}` : '');
+
+  grid.innerHTML = slice.map(i => { const f = cur.frames[i];
+    return `<div class="gcell${f[F.SCANNED] ? '' : ' un'}${i === pos ? ' on' : ''}" data-i="${i}">` +
+      (f[F.BROWSE]
+        ? `<img class="gimg" loading="lazy" src="${browseUrl(f[F.BROWSE])}" alt="" onerror="this.remove()">`
+        : '') +
+      `<div class="gbody"><div class="gtop"><span class="gdot"></span>` +
+      `<span class="gdate">${f[F.DATE] || '—'}</span>` +
+      `<span class="gsub">m${f[F.MIS] || cur.mission} · ${f[F.SAT] || cur.satellite}</span></div>` +
+      `<div class="gid">${f[F.ID]}</div></div></div>`;
+  }).join('');
+  grid.onclick = e => {
+    const c = e.target.closest('.gcell');
+    if (!c) return;
+    closeGrid();
+    show(Number(c.dataset.i));
+  };
+  el('grid-more').style.display = visible.length > gridShown ? 'block' : 'none';
+}
+
+function openGrid(){
+  if (!cur || !visible.length) return;
+  el('grid-overlay').classList.add('open');
+  // Start the page window wide enough to include where you already are, so
+  // opening the grid on frame 90 doesn't land you above the fold.
+  const at = visible.indexOf(pos);
+  gridShown = Math.max(GRID_PAGE, Math.ceil((at + 1) / GRID_PAGE) * GRID_PAGE);
+  renderGrid();
+  const on = el('grid').querySelector('.gcell.on');
+  if (on) on.scrollIntoView({block:'center'});
+}
+function closeGrid(){
+  // The progress panel lives in here, so closing mid-download would hide a
+  // running job with no way back to its Stop button.
+  if (dlAbort){ toast('Download in progress — stop it first.'); return; }
+  dlClose();
+  el('grid-overlay').classList.remove('open');
+}
+
+el('ctx-grid').addEventListener('click', openGrid);
+el('grid-close').addEventListener('click', closeGrid);
+el('grid-more').addEventListener('click', () => { gridShown += GRID_PAGE; renderGrid(); });
+
+// ── exporting a search ──────────────────────────────────────────────────────
+// The browse images are the only preview that exists, and they're ~5MB each,
+// so a 107-frame search is around half a gigabyte. That rules out collecting
+// it in memory and handing over one Blob: where the browser can stream to disk
+// we write each entry straight out and never hold more than one image.
+//
+// Stored, not deflated — JPEG is already compressed, so deflate would spend
+// CPU on every byte to save none, and STORE keeps the writer small enough to
+// carry here instead of vendoring a zip library.
+const CRC_T = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++){
+    let c = n;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+function crc32(buf){
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < buf.length; i++) c = CRC_T[(c ^ buf[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+const dosTime = d => ((d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1)) & 0xFFFF;
+const dosDate = d => (((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate()) & 0xFFFF;
+
+// Every 32-bit field below is why this caps at 4GB: past that a zip needs the
+// zip64 extensions, and a search that big should be narrowed instead.
+const ZIP_MAX = 0xFFFFFFFF;
+
+function zipWriter(sink){
+  const files = [];
+  const enc = new TextEncoder();
+  let offset = 0;
+  const put = async b => { await sink(b); offset += b.length; };
+
+  return {
+    get bytes(){ return offset; },
+    async add(name, bytes){
+      if (offset + bytes.length + name.length + 76 > ZIP_MAX)
+        throw new Error('too big for a plain zip — narrow the search');
+      const nameB = enc.encode(name);
+      const now = new Date(), time = dosTime(now), date = dosDate(now);
+      const crc = crc32(bytes);
+      const at = offset;                   // local header position, before writing
+      const h = new DataView(new ArrayBuffer(30));
+      h.setUint32(0, 0x04034b50, true);
+      h.setUint16(4, 20, true);            // version needed
+      h.setUint16(6, 0x0800, true);        // UTF-8 names
+      h.setUint16(8, 0, true);             // method: store
+      h.setUint16(10, time, true);
+      h.setUint16(12, date, true);
+      h.setUint32(14, crc, true);
+      h.setUint32(18, bytes.length, true); // compressed
+      h.setUint32(22, bytes.length, true); // uncompressed
+      h.setUint16(26, nameB.length, true);
+      h.setUint16(28, 0, true);
+      await put(new Uint8Array(h.buffer));
+      await put(nameB);
+      await put(bytes);
+      // Recorded only once it is fully written, so a cancel mid-entry leaves a
+      // central directory describing what actually made it to disk.
+      files.push({ nameB, crc, size: bytes.length, offset: at, time, date });
+    },
+    async close(){
+      const cdStart = offset;
+      for (const f of files){
+        const c = new DataView(new ArrayBuffer(46));
+        c.setUint32(0, 0x02014b50, true);
+        c.setUint16(4, 20, true);          // version made by
+        c.setUint16(6, 20, true);          // version needed
+        c.setUint16(8, 0x0800, true);
+        c.setUint16(10, 0, true);
+        c.setUint16(12, f.time, true);
+        c.setUint16(14, f.date, true);
+        c.setUint32(16, f.crc, true);
+        c.setUint32(20, f.size, true);
+        c.setUint32(24, f.size, true);
+        c.setUint16(28, f.nameB.length, true);
+        c.setUint32(42, f.offset, true);   // local header offset
+        await put(new Uint8Array(c.buffer));
+        await put(f.nameB);
+      }
+      const e = new DataView(new ArrayBuffer(22));
+      e.setUint32(0, 0x06054b50, true);
+      e.setUint16(8, files.length, true);
+      e.setUint16(10, files.length, true);
+      e.setUint32(12, offset - cdStart, true);
+      e.setUint32(16, cdStart, true);
+      await put(new Uint8Array(e.buffer));
+    },
+  };
+}
+
+// ── what goes in the box ────────────────────────────────────────────────────
+const csvCell = v => {
+  const s = v == null ? '' : String(v);
+  return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+};
+
+function exportRows(){
+  return visible.map(i => {
+    const f = cur.frames[i];
+    const ds = f[F.DS] || cur.dataset;
+    return {
+      entityId: f[F.ID],
+      acquired: f[F.DATE],
+      satellite: f[F.SAT] || cur.satellite,
+      mission: f[F.MIS] || cur.mission,
+      camera: f[F.CAM],
+      hiResDownload: f[F.SCANNED] ? 'available' : 'browse only',
+      lon: f[F.LON], lat: f[F.LAT],
+      image: 'images/' + f[F.ID] + '.jpg',
+      browseUrl: /^https?:\/\//.test(f[F.BROWSE] || '') ? f[F.BROWSE] : cur.browsePrefix + f[F.BROWSE],
+      earthExplorer: `https://earthexplorer.usgs.gov/scene/metadata/full/${EE_IDS[ds] || ds}/${f[F.ID]}/`,
+      _tail: f[F.BROWSE],
+    };
+  });
+}
+
+function exportCsv(rows){
+  const cols = ['entityId','acquired','satellite','mission','camera','hiResDownload',
+                'lat','lon','image','browseUrl','earthExplorer'];
+  return [cols.join(',')]
+    .concat(rows.map(r => cols.map(c => csvCell(r[c])).join(',')))
+    .join('\r\n') + '\r\n';
+}
+
+function exportManifest(rows){
+  return JSON.stringify({
+    generated: new Date().toISOString(),
+    source: 'USGS declassified satellite imagery · declass-map',
+    note: 'Images are the USGS browse previews, not the high-resolution scans. ' +
+          'Frames marked "browse only" have no hi-res scan to download from USGS.',
+    area: aoiBBox ? { west: aoiBBox[0], south: aoiBBox[1], east: aoiBBox[2], north: aoiBBox[3] } : null,
+    includesBrowseOnly: showUnscannedAoi,
+    frames: rows.length,
+    dateRange: rows.length ? [rows[0].acquired, rows[rows.length - 1].acquired] : null,
+  }, null, 2);
+}
+
+const fmtMB = b => b >= 1073741824 ? (b / 1073741824).toFixed(2) + ' GB'
+                                   : Math.round(b / 1048576) + ' MB';
+const fmtLeft = s => s >= 90 ? `about ${Math.round(s / 60)} min` : `${Math.round(s)}s`;
+
+// A base name that says where and when, so a folder of these stays sortable.
+function exportName(rows){
+  const box = aoiBBox
+    ? `${aoiBBox[1].toFixed(2)}N${aoiBBox[0].toFixed(2)}E`.replace(/-/g, 'm')
+    : 'frames';
+  return `declass-${box}-${rows.length}frames`;
+}
+
+function saveBlob(blob, name){
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+}
+
+// ── the download itself ─────────────────────────────────────────────────────
+let dlAbort = null;
+
+function dlPanel(title, html, {start, cancel, bar} = {}){
+  el('dl').classList.add('show');
+  el('dl-h').textContent = title;
+  el('dl-p').innerHTML = html;
+  el('dl-bar').classList.toggle('show', !!bar);
+  el('dl-go').style.display = start ? '' : 'none';
+  el('dl-go').textContent = start || 'Start';
+  el('dl-cancel').textContent = cancel || 'Cancel';
+}
+function dlClose(){
+  el('dl').classList.remove('show');
+  el('dl-bar').querySelector('i').style.width = '0';
+}
+
+function askDownload(){
+  if (!cur || !visible.length) return;
+  const n = visible.length;
+  // Deliberately no size estimate: browse images run from ~40KB for a CORONA
+  // frame to several MB for HEXAGON, so any up-front figure would be wrong by
+  // an order of magnitude either way. The panel reports the real total as it
+  // arrives instead.
+  const streams = typeof window.showSaveFilePicker === 'function';
+  dlPanel('Download all',
+    `<b>${n.toLocaleString()} frame${n === 1 ? '' : 's'}</b> with metadata, as one ZIP.<br>` +
+    `Preview sizes vary a lot, so the total isn't known until it's fetched — ` +
+    `you'll see it climb as it goes, and you can stop at any point.` +
+    (streams ? '' : '<br><span class="warn">This browser can\'t stream to disk, so the ' +
+                    'archive is built in memory — a very large search may struggle.</span>'),
+    { start: 'Start' });
+  el('dl-go').onclick = runDownload;
+  el('dl-cancel').onclick = dlClose;
+}
+
+async function runDownload(){
+  const rows = exportRows();
+  const name = exportName(rows);
+  dlAbort = new AbortController();
+  const signal = dlAbort.signal;
+
+  // Two ways out: stream straight to a file the user picks, or accumulate and
+  // hand over a Blob. Only a dismissed picker aborts the whole thing — any
+  // other failure falls through to the Blob path rather than doing nothing,
+  // which is the one outcome that looks like a broken button.
+  let sink, finish, streamed = false;
+  let acc = new Blob([]);
+  const blobSink = () => {
+    // Appending Blob to Blob rather than keeping 100+ Uint8Arrays alive: the
+    // browser can spill Blob data to disk, a JS array of buffers is all heap.
+    sink = b => { acc = new Blob([acc, b], { type: 'application/zip' }); };
+    finish = () => saveBlob(acc, name + '.zip');
+  };
+
+  if (typeof window.showSaveFilePicker === 'function'){
+    try {
+      const handle = await window.showSaveFilePicker({
+        suggestedName: name + '.zip',
+        types: [{ description: 'ZIP archive', accept: { 'application/zip': ['.zip'] } }],
+      });
+      const ws = await handle.createWritable();
+      sink = b => ws.write(b);
+      finish = () => ws.close();
+      streamed = true;
+    } catch (e){
+      if (e.name === 'AbortError'){ dlClose(); return; }   // picker dismissed
+      console.warn('save picker unavailable, falling back to in-memory:', e);
+      blobSink();
+    }
+  } else {
+    blobSink();
+  }
+
+  const zip = zipWriter(sink);
+  const enc = new TextEncoder();
+  let sealed = false;                       // central directory already written?
+  let done = 0, failed = 0, got = 0;        // got: bytes actually off the wire
+  const t0 = performance.now();
+
+  dlPanel('Downloading', 'Contacting USGS…', { cancel: 'Stop', bar: true });
+  el('dl-cancel').onclick = () => dlAbort && dlAbort.abort();
+
+  // Progress is measured in bytes, not completed frames: at ~5MB an image, a
+  // frame-counted bar stands still for seconds at a time and reads as hung.
+  // The total isn't known in advance — no manifest carries these sizes — so it
+  // is projected from the average frame so far and refines as it goes.
+  const secs = () => (performance.now() - t0) / 1000;
+  let painted = 0;
+  function tick(force){
+    const now = performance.now();
+    if (!force && now - painted < 120) return;   // ~8 repaints a second, no more
+    painted = now;
+    const per = done ? got / done : 0;
+    const projected = per ? per * rows.length : 0;
+    const frac = projected ? Math.min(got / projected, 0.995) : 0;
+    const rate = secs() > 0.5 ? got / secs() : 0;
+    const left = (projected && rate) ? Math.max(0, (projected - got) / rate) : 0;
+    el('dl-p').innerHTML =
+      `<b>${done}</b> of ${rows.length} frames · <b>${fmtMB(got)}</b>` +
+      (rate ? ` · ${(rate / 1048576).toFixed(1)} MB/s` : '') +
+      (left > 1 ? ` · ${fmtLeft(left)} left` : '') +
+      (failed ? `<br><span class="warn">${failed} unavailable</span>` : '');
+    el('dl-bar').querySelector('i').style.width = (frac * 100).toFixed(1) + '%';
+  }
+
+  // Fetch a few ahead but write in order: the zip is a stream, so entries can
+  // only be appended one at a time, and a lookahead keeps the link busy.
+  // Reading the body chunk by chunk is what lets the bar move inside a frame
+  // rather than only between frames.
+  async function grab(r){
+    const res = await fetch(browseUrl(r._tail), { signal });
+    if (!res.ok) return { r, buf: null };
+    if (!res.body){                       // no streams: fall back to one gulp
+      const buf = new Uint8Array(await res.arrayBuffer());
+      got += buf.length; tick();
+      return { r, buf };
+    }
+    const reader = res.body.getReader();
+    const chunks = [];
+    let n = 0;
+    for (;;){
+      const { done: fin, value } = await reader.read();
+      if (fin) break;
+      chunks.push(value); n += value.length; got += value.length;
+      tick();
+    }
+    const buf = new Uint8Array(n);
+    let at = 0;
+    for (const c of chunks){ buf.set(c, at); at += c.length; }
+    return { r, buf };
+  }
+
+  async function* ahead(n){
+    const q = [];
+    let i = 0;
+    const push = () => {
+      if (i >= rows.length) return;
+      q.push(grab(rows[i++]).catch(err => {
+        if (err.name === 'AbortError') throw err;
+        return { r: null, buf: null };
+      }));
+    };
+    for (let k = 0; k < n; k++) push();
+    while (q.length){ const v = await q.shift(); push(); yield v; }
+  }
+
+  try {
+    await zip.add('frames.csv', enc.encode(exportCsv(rows)));
+    await zip.add('search.json', enc.encode(exportManifest(rows)));
+    for await (const { r, buf } of ahead(4)){
+      if (buf && r) await zip.add('images/' + r.entityId + '.jpg', buf);
+      else failed++;
+      done++;
+      tick(true);
+    }
+    el('dl-bar').querySelector('i').style.width = '100%';
+    el('dl-p').innerHTML = 'Finishing the archive…';
+    sealed = true; await zip.close();
+    await finish();
+    dlClose();
+    toast(`Saved ${rows.length - failed} image${rows.length - failed === 1 ? '' : 's'}` +
+          ` · ${fmtMB(zip.bytes)}` + (failed ? ` · ${failed} unavailable` : ''));
+  } catch (e){
+    const stopped = e.name === 'AbortError';
+    console.error('download failed:', e);
+    // Close the archive properly even when stopped, so what was written so far
+    // opens as a valid ZIP rather than a truncated one — but only if the
+    // central directory hasn't already gone out, or it would be written twice.
+    let saved = false;
+    try {
+      if (!sealed){ sealed = true; await zip.close(); }
+      await finish();
+      saved = true;
+    } catch (e2){ console.error('could not finish the archive:', e2); }
+    dlPanel(stopped ? 'Stopped' : 'Download failed',
+      stopped
+        ? `Stopped after <b>${done}</b> of ${rows.length}.` +
+          (saved ? ' The partial ZIP was still written.' : '')
+        : `<span class="warn">${e.message || e}</span>` +
+          (saved ? `<br>A partial ZIP with ${done} frame${done === 1 ? '' : 's'} was written.` : ''),
+      { cancel: 'Close' });
+    el('dl-cancel').onclick = dlClose;
+  } finally {
+    dlAbort = null;
+  }
+}
+
+el('dl-all').addEventListener('click', askDownload);
+el('dl-csv').addEventListener('click', () => {
+  if (!cur || !visible.length) return;
+  const rows = exportRows();
+  saveBlob(new Blob([exportCsv(rows)], { type: 'text/csv;charset=utf-8' }),
+           exportName(rows) + '.csv');
+  toast(`${rows.length.toLocaleString()} rows exported.`);
+});
+
+// ── overlay open/close ──────────────────────────────────────────────────────
+// The overlay is only ever the drawing surface now: results live in the rail
+// beside the viewer, so a search has nowhere else to go.
+function openAoiOverlay(){
+  el('aoi-overlay').classList.add('open');
+  ensureAoiMap();
+  el('aoi-sub').textContent = 'draw a box to find frames';
+  if (aoiMap) aoiMap.resize();
+}
+function closeAoiOverlay(){
+  el('aoi-overlay').classList.remove('open');
+  if (aoiDrawing) setAoiDrawing(false);
+}
+
+el('btn-aoi').addEventListener('click', openAoiOverlay);
+el('aoi-close').addEventListener('click', closeAoiOverlay);
+el('aoi-draw').addEventListener('click', () => setAoiDrawing(!aoiDrawing));
+el('aoi-fp').addEventListener('click', () =>
+  setAoiFootprints(!el('aoi-fp').classList.contains('on')));
+for (const b of el('aoi-bm').children)
+  b.addEventListener('click', () => setAoiBasemap(b.dataset.bm));
+el('aoi-clear').addEventListener('click', () => {
+  el('aoi-rect').style.display = 'none'; aoiBBox = null; aoiRaw = [];
+});
+el('aoi-unsc').addEventListener('change', e => { showUnscannedAoi = e.target.checked; });
+el('ctx-copy').addEventListener('click', () => {
+  if (!aoiBBox) return;
+  const url = location.origin + '/frames#' + aoiHashFor('');
+  navigator.clipboard.writeText(url).then(
+    () => toast('Link copied.'),
+    () => toast(url));
+});
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  if (el('grid-overlay').classList.contains('open')) closeGrid();
+  else if (el('aoi-overlay').classList.contains('open')) closeAoiOverlay();
+});
+
+// ── find a place to draw over ───────────────────────────────────────────────
+// Entered on the AOI map so you can get to a target without knowing its
+// coordinates. Geocoding runs on Enter, not per keystroke — Nominatim's usage
+// policy rules out autocomplete, and one lookup per search is all this needs.
+async function aoiGoto(q){
+  const coord = q.match(/^\s*(-?\d+(?:\.\d+)?)\s*[, ]\s*(-?\d+(?:\.\d+)?)\s*$/);
+  if (coord){
+    const lat = parseFloat(coord[1]), lon = parseFloat(coord[2]);
+    if (Math.abs(lat) > 90 || Math.abs(lon) > 180){ toast('Coordinates out of range'); return; }
+    aoiMap.flyTo({ center: [lon, lat], zoom: Math.max(aoiMap.getZoom(), 9), duration: 900 });
+    return;
+  }
+  el('aoi-note').textContent = 'Searching…';
+  try {
+    const r = await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&q='
+                          + encodeURIComponent(q));
+    if (!r.ok) throw new Error('geocoder ' + r.status);
+    const hits = await r.json();
+    if (!hits.length){ toast(`Couldn't find "${q}".`); updateAoiDrawGate(); return; }
+    const h = hits[0];
+    aoiMap.flyTo({ center: [Number(h.lon), Number(h.lat)], zoom: 10, duration: 1100 });
+    toast(h.display_name.split(',').slice(0, 3).join(','));
+  } catch (e){
+    toast('Place search is unavailable — try lat, lon.');
+  }
+  updateAoiDrawGate();
+}
+el('aoi-search').addEventListener('keydown', e => {
+  if (e.key !== 'Enter') return;
+  const q = el('aoi-search').value.trim();
+  if (q) aoiGoto(q);
+});
+
+// Deep link: /frames#aoi=W,S,E,N[&unsc=1][&f=ENTITYID] reproduces a search on
+// load — the link carries the box, not the results, so it re-runs the same
+// query rather than shipping a stale result list. With &f it goes straight to
+// that frame full size, still stepping only through the search.
+function aoiHashFor(id){
+  if (!aoiBBox) return id || '';
+  return `aoi=${aoiBBox.map(v => v.toFixed(4)).join(',')}`
+       + (showUnscannedAoi ? '&unsc=1' : '')
+       + (id ? '&f=' + id : '');
+}
+
+function openAoiFromHash(hash){
+  const params = new URLSearchParams(hash);
+  const raw = params.get('aoi');
+  if (!raw) return;
+  const parts = raw.split(',').map(Number);
+  if (parts.length !== 4 || parts.some(v => !Number.isFinite(v))) return;
+  showUnscannedAoi = params.get('unsc') === '1';
+  pendingAoiFrame = params.get('f') || null;
+  el('aoi-overlay').classList.add('open');
+  ensureAoiMap();
+  el('aoi-unsc').checked = showUnscannedAoi;
+  runAoiFromBBox(...parts);
+}
+
 initMini();
 
-// Deep link: /frames.html#D3C1214-300989A017
-const initial = decodeURIComponent(location.hash.slice(1));
-if (initial) { el('eid').value = initial; open(initial); }
+// Deep link: /frames.html#D3C1214-300989A017, or #aoi=W,S,E,N for a search.
+const rawHash = location.hash.slice(1);
+if (rawHash.startsWith('aoi=')) {
+  openAoiFromHash(rawHash);
+} else {
+  const initial = decodeURIComponent(rawHash);
+  if (initial) { el('eid').value = initial; open(initial); }
+}
 </script>
 </body>
 </html>
