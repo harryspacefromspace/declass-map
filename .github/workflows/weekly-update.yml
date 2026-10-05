@@ -252,6 +252,7 @@ jobs:
             --accumulate-attribute=ns:sum \
             --accumulate-attribute=nu:sum \
             --accumulate-attribute=fsa:max \
+            $(cat centroids.geojson.attrs) \
             --force centroids.geojson
 
           tile-join -o combined.mbtiles --force footprints.mbtiles cells.mbtiles

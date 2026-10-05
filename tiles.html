@@ -482,6 +482,31 @@ function paintHistogram(lo, hi){
     i.classList.toggle('on', Number(i.dataset.y) >= lo && Number(i.dataset.y) <= hi);
 }
 
+// Keys of the per-cluster tallies built by make_centroids.py: c_<sat>_<year>_<s|u>.
+const satSlug = n => n.replace(/[^A-Za-z0-9]/g, '');
+function cellKeys(lo, hi, scanned, unscanned){
+  const keys = [];
+  if (!facets) return keys;
+  for (const sat of selSat) for (let y = lo; y <= hi; y++){
+    if (scanned) keys.push(`c_${satSlug(sat)}_${y}_s`);
+    if (unscanned) keys.push(`c_${satSlug(sat)}_${y}_u`);
+  }
+  return keys;
+}
+// Expression for how many scenes in a cell pass the satellite/year/scanned
+// filters; null when none can.
+function cellValueExpr(lo, hi, scanned, unscanned){
+  const simple = ['get', (scanned && unscanned) ? 'n' : scanned ? 'ns' : 'nu'];
+  if (!facets) return (scanned || unscanned) ? simple : null;
+  const keys = cellKeys(lo, hi, scanned, unscanned);
+  if (!keys.length) return null;
+  const untouched = selSat.size === facets.satellites.length && lo <= YMIN && hi >= YMAX;
+  if (untouched) return simple;
+  return ['+', ...keys.map(k => ['coalesce', ['get', k], 0])];
+}
+function cellValue(props, lo, hi, scanned, unscanned){
+  return cellKeys(lo, hi, scanned, unscanned).reduce((t, k) => t + (props[k] || 0), 0);
+}
 function applyFilter(){
   const scanned = el('f-scanned').checked, unscanned = el('f-unscanned').checked;
   const [lo, hi] = yearBounds();
@@ -552,12 +577,14 @@ function applyFilter(){
   // Count cells carry tallies, not geometry, so the scanned/unscanned toggle
   // picks which tally to draw. Satellite and year can't apply to a count that
   // was aggregated without them.
-  const field = (scanned && unscanned) ? 'n' : scanned ? 'ns' : unscanned ? 'nu' : null;
-  if (field){
-    const v = ['get', field];
-    // Cells carry only the newest availability date inside them, so "recent"
-    // hides cells with nothing new rather than recounting what's in the rest.
+  // Count cells carry a tally per satellite/year/scanned combination, so those
+  // three filters apply exactly. Anything else (camera, mission, exact dates,
+  // frame order, unpublished) can't be recovered from an aggregate.
+  const v = cellValueExpr(lo, hi, scanned, unscanned);
+  if (v){
     const cellF = ['all', ['>', v, 0]];
+    // Cells also hold the newest availability date inside them, so "recent"
+    // hides cells with nothing new rather than recounting what's in the rest.
     if (days > 0)
       cellF.push(['>=', ['coalesce', ['get','fsa'], 0], Math.floor(Date.now() / 864e5) - days]);
     for (const l of ['cells','cells-count','heat']) map.setFilter(l, cellF);
@@ -669,21 +696,17 @@ function report(){
   const z = map.getZoom();
   if (z < 5){
     const cells = map.queryRenderedFeatures({layers:['cells']});
-    const field = el('f-scanned').checked && el('f-unscanned').checked ? 'n'
-                : el('f-scanned').checked ? 'ns' : el('f-unscanned').checked ? 'nu' : null;
-    const total = field ? cells.reduce((s,c) => s + (c.properties[field]||0), 0) : 0;
-    // The count cells were aggregated with only the scanned split, so any other
-    // active filter makes these totals broader than the footprints would be.
+    const [lo, hi] = yearBounds();
+    const sc = el('f-scanned').checked, un = el('f-unscanned').checked;
+    const total = cells.reduce((t, c) => t + (cellValue(c.properties, lo, hi, sc, un)), 0);
+    // Satellite, year and scanned are exact here; the rest still aren't.
     const partial = el('f-unpub').checked
-                 || el('f-recent').value !== '0'
                  || el('f-d-lo').value || el('f-d-hi').value
-                 || Number(el('f-y-lo').value) > YMIN || Number(el('f-y-hi').value) < YMAX
-                 || (facets && (selSat.size < facets.satellites.length
-                             || selCam.size < facets.cameras.length))
+                 || (facets && selCam.size < facets.cameras.length)
                  || selMis.size > 0 || frMax < 100;
     el('counter').innerHTML = '<b>' + total.toLocaleString() + '</b> scenes in <b>'
       + cells.length + '</b> groups · zoom in for footprints'
-      + (partial ? ' <span style="color:#8b98a9">(grouped counts ignore filters)</span>' : '');
+      + (partial ? ' <span style="color:#8b98a9">(grouped counts ignore camera, mission, date and order filters)</span>' : '');
   } else {
     const n = rendered().length;
     el('counter').innerHTML = '<b>' + n.toLocaleString() + '</b> footprints on screen';

@@ -865,8 +865,8 @@ const AVAIL_SEED = "2026-02-20";  // backfill date; firstSeen == this means "ava
 const map = L.map('map', {center:[35,30], zoom:2, preferCanvas:true, zoomControl:true});
 
 const BASEMAPS = {
-  dark:      L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-               {attribution:'© CartoDB © OpenStreetMap', subdomains:'abcd', maxZoom:19}),
+  dark:      L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
+               {attribution:'© Esri, HERE, Garmin, © OpenStreetMap contributors', maxZoom:19, maxNativeZoom:16}),
   satellite: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
                {attribution:'© Esri © USGS', maxZoom:19}),
   hybrid:    [
@@ -890,7 +890,7 @@ let pendingGlobePov = null;   // view restored from the URL, applied once the gl
 // The globe can draw the same slippy tiles as the flat map, which is far
 // sharper than a single 2048x1024 texture for the whole planet.
 const GLOBE_TILES = {
-  dark:      (x, y, l) => `https://${'abcd'[Math.abs(x + y) % 4]}.basemaps.cartocdn.com/dark_all/${l}/${x}/${y}.png`,
+  dark:      (x, y, l) => `https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/${l}/${y}/${x}`,
   satellite: (x, y, l) => `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${l}/${y}/${x}`,
   hybrid:    (x, y, l) => `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${l}/${y}/${x}`,
   osm:       (x, y, l) => `https://${'abc'[Math.abs(x + y) % 3]}.tile.openstreetmap.org/${l}/${x}/${y}.png`

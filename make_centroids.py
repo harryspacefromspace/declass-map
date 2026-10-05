@@ -10,6 +10,7 @@ Each point carries three counts rather than one so the scanned/unscanned toggle
 still works when zoomed out: n (all), ns (scanned), nu (not scanned).
 """
 import json
+import re
 import sys
 from datetime import date
 
@@ -40,6 +41,11 @@ def centroid(geom):
     return ((x0 + x1) / 2.0, (y0 + y1) / 2.0)
 
 
+def slug(name):
+    """Satellite name as a property-safe token; tiles.html builds the same one."""
+    return re.sub(r"[^A-Za-z0-9]", "", name or "")
+
+
 def main():
     src = sys.argv[1] if len(sys.argv) > 1 else "available_scenes.geojson"
     dest = sys.argv[2] if len(sys.argv) > 2 else "centroids.geojson"
@@ -49,6 +55,7 @@ def main():
 
     features = data.get("features") or []
     written = skipped = 0
+    keys = set()
 
     # Newline-delimited GeoJSON: tippecanoe reads it streaming, and it keeps us
     # from holding a second full copy in memory.
@@ -68,6 +75,12 @@ def main():
                 fsa_day = (date.fromisoformat(fsa) - date(1970, 1, 1)).days
             except ValueError:
                 fsa_day = 0
+            year = str(props.get("acquisitionDate") or "")[:4]
+            # One tally per satellite/year/scanned combination, so the filters
+            # for those can still be applied to a cluster that has no features
+            # left to filter. Marginals can't be recombined, hence the product.
+            key = f"c_{slug(props.get('satellite'))}_{year}_{'s' if scanned else 'u'}"
+            keys.add(key)
             out.write(json.dumps({
                 "type": "Feature",
                 "geometry": {"type": "Point", "coordinates": [point[0], point[1]]},
@@ -76,6 +89,7 @@ def main():
                     "ns": 1 if scanned else 0,
                     "nu": 0 if scanned else 1,
                     "fsa": fsa_day,
+                    key: 1,
                 },
             }, separators=(",", ":")))
             out.write("\n")
@@ -83,6 +97,12 @@ def main():
 
     print(f"centroids: {written:,} written, {skipped:,} skipped "
           f"(antimeridian or no geometry) -> {dest}")
+
+    # tippecanoe has no wildcard for --accumulate-attribute, so hand the build
+    # the exact list of tally keys it needs to sum.
+    with open(dest + ".attrs", "w", encoding="utf-8") as fh:
+        fh.write(" ".join(f"--accumulate-attribute={k}:sum" for k in sorted(keys)))
+    print(f"centroids: {len(keys)} tally keys -> {dest}.attrs")
 
     if not written:
         print("centroids: refusing to continue with an empty count layer")
