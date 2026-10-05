@@ -11,6 +11,7 @@ still works when zoomed out: n (all), ns (scanned), nu (not scanned).
 """
 import json
 import sys
+from datetime import date
 
 
 def centroid(geom):
@@ -57,7 +58,16 @@ def main():
             if point is None:
                 skipped += 1
                 continue
-            scanned = feat.get("properties", {}).get("scanned") is not False
+            props = feat.get("properties", {})
+            scanned = props.get("scanned") is not False
+            # Days since 1970 that the scene became downloadable (0 if unknown),
+            # summed as a max per cluster so "recently available" can hide cells
+            # with nothing new in them.
+            fsa = str(props.get("firstSeenAvailable") or "")[:10]
+            try:
+                fsa_day = (date.fromisoformat(fsa) - date(1970, 1, 1)).days
+            except ValueError:
+                fsa_day = 0
             out.write(json.dumps({
                 "type": "Feature",
                 "geometry": {"type": "Point", "coordinates": [point[0], point[1]]},
@@ -65,6 +75,7 @@ def main():
                     "n": 1,
                     "ns": 1 if scanned else 0,
                     "nu": 0 if scanned else 1,
+                    "fsa": fsa_day,
                 },
             }, separators=(",", ":")))
             out.write("\n")

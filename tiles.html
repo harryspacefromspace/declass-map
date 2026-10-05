@@ -265,15 +265,19 @@ proto.add(new pmtiles.PMTiles(SRC));
 // style instead tears down the vector layers and re-requests every tile, which
 // is what made the old globe's basemap switching feel broken.
 const RASTER = {
-  carto: ['https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
-          'https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png'],
+  // Carto watermarks its tiles now, so the dark base is Esri Canvas, matching
+  // the swap index.html made. Esri reverses the path to {z}/{y}/{x}.
+  carto: ['https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}'],
   esri:  ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
   esriRef: ['https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}'],
   osm:   ['https://a.tile.openstreetmap.org/{z}/{x}/{y}.png',
           'https://b.tile.openstreetmap.org/{z}/{x}/{y}.png'],
 };
-const rasterSource = tiles => ({type:'raster', tiles, tileSize:256, maxzoom:19,
-  attribution:'© OpenStreetMap, © CARTO, © Esri · USGS/NASA'});
+// maxzoom caps what's *requested*; MapLibre overzooms past it. Esri Canvas
+// only has real tiles to z16 and returns a blank placeholder beyond, so it
+// gets its own cap rather than grey squares at deep zoom.
+const rasterSource = (tiles, maxzoom = 19) => ({type:'raster', tiles, tileSize:256, maxzoom,
+  attribution:'© OpenStreetMap, © Esri · USGS/NASA'});
 
 const map = new maplibregl.Map({
   container:'map', center:[45,40], zoom:3, maxZoom:15, hash:true,
@@ -281,7 +285,7 @@ const map = new maplibregl.Map({
     version:8,
     glyphs:'vendor/fonts/{fontstack}/{range}.pbf',
     sources:{
-      bm_carto:rasterSource(RASTER.carto), bm_esri:rasterSource(RASTER.esri),
+      bm_carto:rasterSource(RASTER.carto, 16), bm_esri:rasterSource(RASTER.esri),
       bm_esriRef:rasterSource(RASTER.esriRef), bm_osm:rasterSource(RASTER.osm),
       scenes:{type:'vector', url:'pmtiles://'+SRC, minzoom:0, maxzoom:8},
     },
@@ -551,7 +555,12 @@ function applyFilter(){
   const field = (scanned && unscanned) ? 'n' : scanned ? 'ns' : unscanned ? 'nu' : null;
   if (field){
     const v = ['get', field];
-    for (const l of ['cells','cells-count','heat']) map.setFilter(l, ['>', v, 0]);
+    // Cells carry only the newest availability date inside them, so "recent"
+    // hides cells with nothing new rather than recounting what's in the rest.
+    const cellF = ['all', ['>', v, 0]];
+    if (days > 0)
+      cellF.push(['>=', ['coalesce', ['get','fsa'], 0], Math.floor(Date.now() / 864e5) - days]);
+    for (const l of ['cells','cells-count','heat']) map.setFilter(l, cellF);
     map.setPaintProperty('cells','circle-radius',
       ['interpolate',['linear'],['sqrt',v],0,4,10,9,40,15,100,22,250,32]);
     map.setPaintProperty('heat','heatmap-weight',['interpolate',['linear'],v,0,0,400,1]);
