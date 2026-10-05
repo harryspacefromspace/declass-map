@@ -257,6 +257,15 @@ jobs:
 
           tile-join -o combined.mbtiles --force footprints.mbtiles cells.mbtiles
           pmtiles convert combined.mbtiles scenes.pmtiles
+          # Low-zoom footprints, z0-4, in their own archive so the count tiles
+          # stay small. The map only fetches it when the view holds under 1000
+          # scenes and draws outlines instead of counts. Only the properties the
+          # filters and popup need — browse alone would add ~40MB — and no tile
+          # limits, because dropping a footprint here means a scene that
+          # silently isn't shown.
+          tippecanoe -o scenes-lo.mbtiles -l scenes -Z0 -z4             -y entityId -y scanned -y satellite -y camera -y dataset -y mission             -y acquisitionDate -y published -y firstSeenAvailable -y fr             --no-tiny-polygon-reduction --no-tile-size-limit --no-feature-limit             --force available_scenes.geojson
+          pmtiles convert scenes-lo.mbtiles scenes-lo.pmtiles
+          ls -lh scenes-lo.pmtiles
           pmtiles show scenes.pmtiles | head -12
           ls -lh scenes.pmtiles
 
@@ -267,6 +276,8 @@ jobs:
           aws s3 cp scenes.pmtiles "s3://${R2_BUCKET}/scenes.pmtiles" \
             --endpoint-url "https://${CF_ACCOUNT_ID}.r2.cloudflarestorage.com" \
             --content-type "application/octet-stream"
+          test -s scenes-lo.pmtiles || { echo "no low-zoom archive to upload"; exit 1; }
+          aws s3 cp scenes-lo.pmtiles "s3://${R2_BUCKET}/scenes-lo.pmtiles"             --endpoint-url "https://${CF_ACCOUNT_ID}.r2.cloudflarestorage.com"             --content-type "application/octet-stream"
           echo "uploaded $(du -h scenes.pmtiles | cut -f1) of tiles"
         env:
           R2_BUCKET: declass-map-data

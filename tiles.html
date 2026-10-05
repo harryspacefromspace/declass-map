@@ -250,6 +250,9 @@
 <script>
 const t0 = performance.now();
 const SRC = location.origin + '/data/scenes.pmtiles';
+// Footprints for z0-4, only ever fetched while the view holds few enough
+// scenes to draw them outright instead of as counts.
+const SRC_LO = location.origin + '/data/scenes-lo.pmtiles';
 const el = id => document.getElementById(id);
 
 const DS_EE_IDS = {corona2:'5e839febdccb64b3', declassii:'5e839ff7d71d4811',
@@ -260,6 +263,7 @@ const eeUrl = p => 'https://earthexplorer.usgs.gov/scene/metadata/full/'
 const proto = new pmtiles.Protocol();
 maplibregl.addProtocol('pmtiles', proto.tile);
 proto.add(new pmtiles.PMTiles(SRC));
+proto.add(new pmtiles.PMTiles(SRC_LO));
 
 // Basemaps are all mounted at once and toggled by visibility. Swapping the
 // style instead tears down the vector layers and re-requests every tile, which
@@ -288,6 +292,7 @@ const map = new maplibregl.Map({
       bm_carto:rasterSource(RASTER.carto, 16), bm_esri:rasterSource(RASTER.esri),
       bm_esriRef:rasterSource(RASTER.esriRef), bm_osm:rasterSource(RASTER.osm),
       scenes:{type:'vector', url:'pmtiles://'+SRC, minzoom:0, maxzoom:8},
+      scenes_lo:{type:'vector', url:'pmtiles://'+SRC_LO, minzoom:0, maxzoom:4},
     },
     layers:[
       {id:'bm-carto', type:'raster', source:'bm_carto', paint:{'raster-opacity':0.8}},
@@ -327,6 +332,19 @@ const map = new maplibregl.Map({
        paint:{'line-color':['case',['==',['get','scanned'],false],'#a78bfa','#f6c453'],
               'line-width':['interpolate',['linear'],['zoom'],5,0.35,9,0.7,13,1.2],
               'line-opacity':['interpolate',['linear'],['zoom'],5,0.5,9,0.8]}},
+      // Same look as fill/line, for the low-zoom footprint archive. Hidden until
+      // setLoMode() turns it on, which is what keeps its tiles from loading.
+      {id:'fill-lo', type:'fill', source:'scenes_lo', 'source-layer':'scenes', maxzoom:5,
+       layout:{visibility:'none'},
+       paint:{'fill-color':['case',['==',['get','scanned'],false],'#8b5cf6','#f0b429'],
+              'fill-opacity':0.18}},
+      {id:'line-lo', type:'line', source:'scenes_lo', 'source-layer':'scenes', maxzoom:5,
+       layout:{visibility:'none'},
+       paint:{'line-color':['case',['==',['get','scanned'],false],'#a78bfa','#f6c453'],
+              'line-width':0.8, 'line-opacity':0.9}},
+      {id:'sel-lo', type:'line', source:'scenes_lo', 'source-layer':'scenes', maxzoom:5,
+       filter:['==',['get','entityId'],'__none__'],
+       paint:{'line-color':'#7dd3fc','line-width':2.2}},
       {id:'sel', type:'line', source:'scenes', 'source-layer':'scenes', minzoom:5,
        filter:['==',['get','entityId'],'__none__'],
        paint:{'line-color':'#7dd3fc','line-width':2.2}},
@@ -571,8 +589,7 @@ function applyFilter(){
   if (dLo) clauses.push(['>=', d10, dLo]);
   if (dHi) clauses.push(['<=', d10, dHi]);
   const f = clauses.length > 1 ? clauses : null;
-  map.setFilter('fill', f);
-  map.setFilter('line', f);
+  for (const l of ['fill','line','fill-lo','line-lo']) map.setFilter(l, f);
 
   // Count cells carry tallies, not geometry, so the scanned/unscanned toggle
   // picks which tally to draw. Satellite and year can't apply to a count that
@@ -676,8 +693,22 @@ el('btn-filters').addEventListener('click', () => {
 
 // ── counter + sidebar ───────────────────────────────────────────────────────
 let firstPaint = null;
+// Below z5 the footprints come from the low-zoom archive, and only while
+// loMode is on — otherwise there is nothing to query but count cells.
+let loMode = false;
+function setLoMode(on){
+  if (on === loMode) return;
+  loMode = on;
+  for (const l of ['fill-lo','line-lo'])
+    map.setLayoutProperty(l, 'visibility', on ? 'visible' : 'none');
+  for (const l of ['heat','cells','cells-count'])
+    map.setLayoutProperty(l, 'visibility', on ? 'none' : 'visible');
+}
+const LO_LIMIT = 1000;
 function renderedRaw(){
-  return map.getZoom() < 5 ? [] : map.queryRenderedFeatures({layers:['fill']});
+  const z = map.getZoom();
+  if (z >= 5) return map.queryRenderedFeatures({layers:['fill']});
+  return loMode ? map.queryRenderedFeatures({layers:['fill-lo']}) : [];
 }
 // A footprint that spans several tiles comes back once per tile, so the raw
 // query roughly doubles the count around Moscow (12,728 rows for 6,887 real
@@ -694,7 +725,13 @@ function rendered(){
 function report(){
   if (!map.isStyleLoaded()) return;
   const z = map.getZoom();
-  if (z < 5){
+  if (z < 5 && loMode){
+    // Footprints are showing instead of counts; fall back to counts as soon as
+    // the view holds too many to draw usefully.
+    const n = rendered().length;
+    if (n >= LO_LIMIT){ setLoMode(false); map.once('idle', report); return; }
+    el('counter').innerHTML = '<b>' + n.toLocaleString() + '</b> footprints on screen';
+  } else if (z < 5){
     const cells = map.queryRenderedFeatures({layers:['cells']});
     const [lo, hi] = yearBounds();
     const sc = el('f-scanned').checked, un = el('f-unscanned').checked;
@@ -704,6 +741,8 @@ function report(){
                  || el('f-d-lo').value || el('f-d-hi').value
                  || (facets && selCam.size < facets.cameras.length)
                  || selMis.size > 0 || frMax < 100;
+    // Few enough scenes in view that the count bubbles aren't worth it.
+    if (cells.length && total < LO_LIMIT){ setLoMode(true); map.once('idle', report); return; }
     el('counter').innerHTML = '<b>' + total.toLocaleString() + '</b> scenes in <b>'
       + cells.length + '</b> groups · zoom in for footprints'
       + (partial ? ' <span style="color:#8b98a9">(grouped counts ignore camera, mission, date and order filters)</span>' : '');
@@ -784,23 +823,24 @@ function popupHtml(p){
     + '</div></div>';
 }
 function showPopup(p, lngLat){
-  map.setFilter('sel', ['==',['get','entityId'], p.entityId]);
+  for (const l of ['sel','sel-lo']) map.setFilter(l, ['==',['get','entityId'], p.entityId]);
   // Popup.on() does not return the popup, so this can't be one chain — doing
   // that leaves .addTo undefined and the popup never opens.
   const pop = new maplibregl.Popup({maxWidth:'292px', closeOnClick:true})
     .setLngLat(lngLat).setHTML(popupHtml(p));
-  pop.on('close', () => map.setFilter('sel', ['==',['get','entityId'],'__none__']));
+  pop.on('close', () => { for (const l of ['sel','sel-lo']) map.setFilter(l, ['==',['get','entityId'],'__none__']); });
   pop.addTo(map);
 }
 // An overlay point sitting on top of a footprint should win the click — the
 // footprint is always reachable elsewhere, the point is a specific target.
 const overlayHit = e => map.getLayer('ov-pts') &&
   map.queryRenderedFeatures(e.point, {layers:['ov-pts']}).length > 0;
-map.on('click', 'fill', e => { if (!overlayHit(e)) showPopup(e.features[0].properties, e.lngLat); });
+for (const l of ['fill','fill-lo'])
+  map.on('click', l, e => { if (!overlayHit(e)) showPopup(e.features[0].properties, e.lngLat); });
 map.on('click', 'cells', e => { if (overlayHit(e)) return;
   map.easeTo({center:e.features[0].geometry.coordinates,
               zoom:Math.min(map.getZoom()+2.5, 8), duration:700}); });
-for (const l of ['fill','cells','cells-count']){
+for (const l of ['fill','fill-lo','cells','cells-count']){
   map.on('mouseenter', l, () => map.getCanvas().style.cursor = 'pointer');
   map.on('mouseleave', l, () => map.getCanvas().style.cursor = '');
 }
@@ -950,6 +990,8 @@ map.on('load', () => {
 });
 map.on('idle', report);
 map.on('moveend', () => { sbShown = SB_PAGE; report(); });
+// Low-zoom footprint tiles arrive after the move ends; recount once they do.
+map.on('idle', () => { if (loMode) report(); });
 </script>
 </body>
 </html>
