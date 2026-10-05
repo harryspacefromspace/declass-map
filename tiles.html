@@ -292,7 +292,6 @@ const map = new maplibregl.Map({
       bm_carto:rasterSource(RASTER.carto, 16), bm_esri:rasterSource(RASTER.esri),
       bm_esriRef:rasterSource(RASTER.esriRef), bm_osm:rasterSource(RASTER.osm),
       scenes:{type:'vector', url:'pmtiles://'+SRC, minzoom:0, maxzoom:8},
-      scenes_lo:{type:'vector', url:'pmtiles://'+SRC_LO, minzoom:0, maxzoom:4},
     },
     layers:[
       {id:'bm-carto', type:'raster', source:'bm_carto', paint:{'raster-opacity':0.8}},
@@ -332,19 +331,6 @@ const map = new maplibregl.Map({
        paint:{'line-color':['case',['==',['get','scanned'],false],'#a78bfa','#f6c453'],
               'line-width':['interpolate',['linear'],['zoom'],5,0.35,9,0.7,13,1.2],
               'line-opacity':['interpolate',['linear'],['zoom'],5,0.5,9,0.8]}},
-      // Same look as fill/line, for the low-zoom footprint archive. Hidden until
-      // setLoMode() turns it on, which is what keeps its tiles from loading.
-      {id:'fill-lo', type:'fill', source:'scenes_lo', 'source-layer':'scenes', maxzoom:5,
-       layout:{visibility:'none'},
-       paint:{'fill-color':['case',['==',['get','scanned'],false],'#8b5cf6','#f0b429'],
-              'fill-opacity':0.18}},
-      {id:'line-lo', type:'line', source:'scenes_lo', 'source-layer':'scenes', maxzoom:5,
-       layout:{visibility:'none'},
-       paint:{'line-color':['case',['==',['get','scanned'],false],'#a78bfa','#f6c453'],
-              'line-width':0.8, 'line-opacity':0.9}},
-      {id:'sel-lo', type:'line', source:'scenes_lo', 'source-layer':'scenes', maxzoom:5,
-       filter:['==',['get','entityId'],'__none__'],
-       paint:{'line-color':'#7dd3fc','line-width':2.2}},
       {id:'sel', type:'line', source:'scenes', 'source-layer':'scenes', minzoom:5,
        filter:['==',['get','entityId'],'__none__'],
        paint:{'line-color':'#7dd3fc','line-width':2.2}},
@@ -589,7 +575,7 @@ function applyFilter(){
   if (dLo) clauses.push(['>=', d10, dLo]);
   if (dHi) clauses.push(['<=', d10, dHi]);
   const f = clauses.length > 1 ? clauses : null;
-  for (const l of ['fill','line','fill-lo','line-lo']) map.setFilter(l, f);
+  for (const l of ['fill','line','fill-lo','line-lo']) if (map.getLayer(l)) map.setFilter(l, f);
 
   // Count cells carry tallies, not geometry, so the scanned/unscanned toggle
   // picks which tally to draw. Satellite and year can't apply to a count that
@@ -695,12 +681,32 @@ el('btn-filters').addEventListener('click', () => {
 let firstPaint = null;
 // Below z5 the footprints come from the low-zoom archive, and only while
 // loMode is on — otherwise there is nothing to query but count cells.
+// The low-zoom archive is added on first use, not declared in the style: a
+// vector source fetches its header as soon as it exists, and a source that is
+// slow or missing keeps map.isStyleLoaded() false, which silently stops the
+// counter and every filter readout from updating.
+function ensureLoLayers(){
+  if (map.getSource('scenes_lo')) return;
+  map.addSource('scenes_lo', {type:'vector', url:'pmtiles://'+SRC_LO, minzoom:0, maxzoom:4});
+  const before = 'sel';
+  const fillColor = ['case',['==',['get','scanned'],false],'#8b5cf6','#f0b429'];
+  const lineColor = ['case',['==',['get','scanned'],false],'#a78bfa','#f6c453'];
+  map.addLayer({id:'fill-lo', type:'fill', source:'scenes_lo', 'source-layer':'scenes', maxzoom:5,
+    paint:{'fill-color':fillColor, 'fill-opacity':0.18}}, before);
+  map.addLayer({id:'line-lo', type:'line', source:'scenes_lo', 'source-layer':'scenes', maxzoom:5,
+    paint:{'line-color':lineColor, 'line-width':0.8, 'line-opacity':0.9}}, before);
+  map.addLayer({id:'sel-lo', type:'line', source:'scenes_lo', 'source-layer':'scenes', maxzoom:5,
+    filter:['==',['get','entityId'],'__none__'],
+    paint:{'line-color':'#7dd3fc','line-width':2.2}}, before);
+  applyFilter();
+}
 let loMode = false;
 function setLoMode(on){
   if (on === loMode) return;
   loMode = on;
+  if (on) ensureLoLayers();
   for (const l of ['fill-lo','line-lo'])
-    map.setLayoutProperty(l, 'visibility', on ? 'visible' : 'none');
+    if (map.getLayer(l)) map.setLayoutProperty(l, 'visibility', on ? 'visible' : 'none');
   for (const l of ['heat','cells','cells-count'])
     map.setLayoutProperty(l, 'visibility', on ? 'none' : 'visible');
 }
@@ -723,7 +729,7 @@ function rendered(){
   return out;
 }
 function report(){
-  if (!map.isStyleLoaded()) return;
+  if (!map.getLayer('cells')) return;
   const z = map.getZoom();
   if (z < 5 && loMode){
     // Footprints are showing instead of counts; fall back to counts as soon as
@@ -823,12 +829,12 @@ function popupHtml(p){
     + '</div></div>';
 }
 function showPopup(p, lngLat){
-  for (const l of ['sel','sel-lo']) map.setFilter(l, ['==',['get','entityId'], p.entityId]);
+  for (const l of ['sel','sel-lo']) if (map.getLayer(l)) map.setFilter(l, ['==',['get','entityId'], p.entityId]);
   // Popup.on() does not return the popup, so this can't be one chain — doing
   // that leaves .addTo undefined and the popup never opens.
   const pop = new maplibregl.Popup({maxWidth:'292px', closeOnClick:true})
     .setLngLat(lngLat).setHTML(popupHtml(p));
-  pop.on('close', () => { for (const l of ['sel','sel-lo']) map.setFilter(l, ['==',['get','entityId'],'__none__']); });
+  pop.on('close', () => { for (const l of ['sel','sel-lo']) if (map.getLayer(l)) map.setFilter(l, ['==',['get','entityId'],'__none__']); });
   pop.addTo(map);
 }
 // An overlay point sitting on top of a footprint should win the click — the
