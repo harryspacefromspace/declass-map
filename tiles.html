@@ -692,21 +692,24 @@ function ensureLoLayers(){
   const fillColor = ['case',['==',['get','scanned'],false],'#8b5cf6','#f0b429'];
   const lineColor = ['case',['==',['get','scanned'],false],'#a78bfa','#f6c453'];
   map.addLayer({id:'fill-lo', type:'fill', source:'scenes_lo', 'source-layer':'scenes', maxzoom:5,
-    paint:{'fill-color':fillColor, 'fill-opacity':0.18}}, before);
+    paint:{'fill-color':fillColor, 'fill-opacity':0}}, before);
   map.addLayer({id:'line-lo', type:'line', source:'scenes_lo', 'source-layer':'scenes', maxzoom:5,
-    paint:{'line-color':lineColor, 'line-width':0.8, 'line-opacity':0.9}}, before);
+    paint:{'line-color':lineColor, 'line-width':0.8, 'line-opacity':0}}, before);
   map.addLayer({id:'sel-lo', type:'line', source:'scenes_lo', 'source-layer':'scenes', maxzoom:5,
     filter:['==',['get','entityId'],'__none__'],
     paint:{'line-color':'#7dd3fc','line-width':2.2}}, before);
   applyFilter();
 }
+// loMode = footprints are what's drawn below z5. Separately, the low-zoom layers
+// can be "probing": loaded and filtered but fully transparent, so the real
+// number of matching footprints in view can be counted without drawing them.
 let loMode = false;
 function setLoMode(on){
+  ensureLoLayers();
   if (on === loMode) return;
   loMode = on;
-  if (on) ensureLoLayers();
-  for (const l of ['fill-lo','line-lo'])
-    if (map.getLayer(l)) map.setLayoutProperty(l, 'visibility', on ? 'visible' : 'none');
+  map.setPaintProperty('fill-lo', 'fill-opacity', on ? 0.18 : 0);
+  map.setPaintProperty('line-lo', 'line-opacity', on ? 0.9 : 0);
   for (const l of ['heat','cells','cells-count'])
     map.setLayoutProperty(l, 'visibility', on ? 'none' : 'visible');
 }
@@ -714,7 +717,7 @@ const LO_LIMIT = 1000;
 function renderedRaw(){
   const z = map.getZoom();
   if (z >= 5) return map.queryRenderedFeatures({layers:['fill']});
-  return loMode ? map.queryRenderedFeatures({layers:['fill-lo']}) : [];
+  return map.getLayer('fill-lo') ? map.queryRenderedFeatures({layers:['fill-lo']}) : [];
 }
 // A footprint that spans several tiles comes back once per tile, so the raw
 // query roughly doubles the count around Moscow (12,728 rows for 6,887 real
@@ -731,27 +734,45 @@ function rendered(){
 function report(){
   if (!map.getLayer('cells')) return;
   const z = map.getZoom();
-  if (z < 5 && loMode){
-    // Footprints are showing instead of counts; fall back to counts as soon as
-    // the view holds too many to draw usefully.
-    const n = rendered().length;
-    if (n >= LO_LIMIT){ setLoMode(false); map.once('idle', report); return; }
-    el('counter').innerHTML = '<b>' + n.toLocaleString() + '</b> footprints on screen';
-  } else if (z < 5){
-    const cells = map.queryRenderedFeatures({layers:['cells']});
-    const [lo, hi] = yearBounds();
-    const sc = el('f-scanned').checked, un = el('f-unscanned').checked;
-    const total = cells.reduce((t, c) => t + (cellValue(c.properties, lo, hi, sc, un)), 0);
-    // Satellite, year and scanned are exact here; the rest still aren't.
-    const partial = el('f-unpub').checked
+  if (z < 5){
+    // Filters the count cells can't apply (they only carry satellite, year and
+    // scanned tallies). With one of these on, the cell total is an overcount,
+    // so the footprints themselves are the only honest number.
+    const inexact = el('f-recent').value !== '0' || el('f-unpub').checked
                  || el('f-d-lo').value || el('f-d-hi').value
                  || (facets && selCam.size < facets.cameras.length)
                  || selMis.size > 0 || frMax < 100;
-    // Few enough scenes in view that the count bubbles aren't worth it.
-    if (cells.length && total < LO_LIMIT){ setLoMode(true); map.once('idle', report); return; }
-    el('counter').innerHTML = '<b>' + total.toLocaleString() + '</b> scenes in <b>'
-      + cells.length + '</b> groups · zoom in for footprints'
-      + (partial ? ' <span style="color:#8b98a9">(grouped counts ignore camera, mission, date and order filters)</span>' : '');
+    let cellTotal = null, cellCount = 0;
+    if (!loMode){
+      const cells = map.queryRenderedFeatures({layers:['cells']});
+      const [lo, hi] = yearBounds();
+      const sc = el('f-scanned').checked, un = el('f-unscanned').checked;
+      cellTotal = cells.reduce((t, c) => t + cellValue(c.properties, lo, hi, sc, un), 0);
+      cellCount = cells.length;
+    }
+    // Footprints become measurable once the low-zoom tiles for this view are in.
+    if (!loMode && (inexact || cellTotal < LO_LIMIT)) ensureLoLayers();
+    const loReady = !!map.getSource('scenes_lo') && map.isSourceLoaded('scenes_lo');
+    const n = loReady ? rendered().length : null;
+
+    if (loMode){
+      // Back to counts once the view holds too many to draw usefully.
+      if (n >= LO_LIMIT){ setLoMode(false); map.once('idle', report); return; }
+    } else if (n !== null && n < LO_LIMIT){
+      setLoMode(true); map.once('idle', report); return;
+    } else if (n === null && !inexact && cellCount && cellTotal < LO_LIMIT){
+      setLoMode(true); map.once('idle', report); return;
+    }
+
+    if (loMode){
+      el('counter').innerHTML = '<b>' + (n ?? 0).toLocaleString() + '</b> footprints on screen';
+    } else if (n !== null){
+      el('counter').innerHTML = '<b>' + n.toLocaleString() + '</b> scenes in view · zoom in for footprints';
+    } else {
+      el('counter').innerHTML = '<b>' + cellTotal.toLocaleString() + '</b> scenes in <b>'
+        + cellCount + '</b> groups · zoom in for footprints'
+        + (inexact ? ' <span style="color:#8b98a9">(counting…)</span>' : '');
+    }
   } else {
     const n = rendered().length;
     el('counter').innerHTML = '<b>' + n.toLocaleString() + '</b> footprints on screen';
@@ -842,12 +863,12 @@ function showPopup(p, lngLat){
 const overlayHit = e => map.getLayer('ov-pts') &&
   map.queryRenderedFeatures(e.point, {layers:['ov-pts']}).length > 0;
 for (const l of ['fill','fill-lo'])
-  map.on('click', l, e => { if (!overlayHit(e)) showPopup(e.features[0].properties, e.lngLat); });
+  map.on('click', l, e => { if (l === 'fill-lo' && !loMode) return; if (!overlayHit(e)) showPopup(e.features[0].properties, e.lngLat); });
 map.on('click', 'cells', e => { if (overlayHit(e)) return;
   map.easeTo({center:e.features[0].geometry.coordinates,
               zoom:Math.min(map.getZoom()+2.5, 8), duration:700}); });
 for (const l of ['fill','fill-lo','cells','cells-count']){
-  map.on('mouseenter', l, () => map.getCanvas().style.cursor = 'pointer');
+  map.on('mouseenter', l, () => { if (l !== 'fill-lo' || loMode) map.getCanvas().style.cursor = 'pointer'; });
   map.on('mouseleave', l, () => map.getCanvas().style.cursor = '');
 }
 
@@ -997,7 +1018,7 @@ map.on('load', () => {
 map.on('idle', report);
 map.on('moveend', () => { sbShown = SB_PAGE; report(); });
 // Low-zoom footprint tiles arrive after the move ends; recount once they do.
-map.on('idle', () => { if (loMode) report(); });
+map.on('idle', () => { if (map.getSource('scenes_lo')) report(); });
 </script>
 </body>
 </html>
