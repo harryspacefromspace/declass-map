@@ -253,6 +253,11 @@ const SRC = location.origin + '/data/scenes.pmtiles';
 // Footprints for z0-4, only ever fetched while the view holds few enough
 // scenes to draw them outright instead of as counts.
 const SRC_LO = location.origin + '/data/scenes-lo.pmtiles';
+// A layer at exactly zero opacity is skipped by MapLibre and never requests its
+// tiles, so a probe has to be almost, not fully, transparent.
+const PROBE = 0.004;
+let loFresh = false;   // see the idle handler below
+let loTiles = false;   // has any low-zoom tile arrived yet
 const el = id => document.getElementById(id);
 
 const DS_EE_IDS = {corona2:'5e839febdccb64b3', declassii:'5e839ff7d71d4811',
@@ -509,9 +514,13 @@ function cellValueExpr(lo, hi, scanned, unscanned){
   return ['+', ...keys.map(k => ['coalesce', ['get', k], 0])];
 }
 function cellValue(props, lo, hi, scanned, unscanned){
+  // Facets (and so the satellite list the tallies are keyed by) load after the
+  // map does; until then the plain per-cell total is the best available.
+  if (!facets) return props.n || 0;
   return cellKeys(lo, hi, scanned, unscanned).reduce((t, k) => t + (props[k] || 0), 0);
 }
 function applyFilter(){
+  loFresh = false;
   const scanned = el('f-scanned').checked, unscanned = el('f-unscanned').checked;
   const [lo, hi] = yearBounds();
   el('y-lo').textContent = lo; el('y-hi').textContent = hi;
@@ -692,9 +701,9 @@ function ensureLoLayers(){
   const fillColor = ['case',['==',['get','scanned'],false],'#8b5cf6','#f0b429'];
   const lineColor = ['case',['==',['get','scanned'],false],'#a78bfa','#f6c453'];
   map.addLayer({id:'fill-lo', type:'fill', source:'scenes_lo', 'source-layer':'scenes', maxzoom:5,
-    paint:{'fill-color':fillColor, 'fill-opacity':0}}, before);
+    paint:{'fill-color':fillColor, 'fill-opacity':PROBE}}, before);
   map.addLayer({id:'line-lo', type:'line', source:'scenes_lo', 'source-layer':'scenes', maxzoom:5,
-    paint:{'line-color':lineColor, 'line-width':0.8, 'line-opacity':0}}, before);
+    paint:{'line-color':lineColor, 'line-width':['interpolate',['linear'],['zoom'],0,2.2,4,1.4], 'line-opacity':PROBE}}, before);
   map.addLayer({id:'sel-lo', type:'line', source:'scenes_lo', 'source-layer':'scenes', maxzoom:5,
     filter:['==',['get','entityId'],'__none__'],
     paint:{'line-color':'#7dd3fc','line-width':2.2}}, before);
@@ -708,8 +717,8 @@ function setLoMode(on){
   ensureLoLayers();
   if (on === loMode) return;
   loMode = on;
-  map.setPaintProperty('fill-lo', 'fill-opacity', on ? 0.18 : 0);
-  map.setPaintProperty('line-lo', 'line-opacity', on ? 0.9 : 0);
+  map.setPaintProperty('fill-lo', 'fill-opacity', on ? 0.45 : PROBE);
+  map.setPaintProperty('line-lo', 'line-opacity', on ? 1 : PROBE);
   for (const l of ['heat','cells','cells-count'])
     map.setLayoutProperty(l, 'visibility', on ? 'none' : 'visible');
 }
@@ -752,7 +761,7 @@ function report(){
     }
     // Footprints become measurable once the low-zoom tiles for this view are in.
     if (!loMode && (inexact || cellTotal < LO_LIMIT)) ensureLoLayers();
-    const loReady = !!map.getSource('scenes_lo') && map.isSourceLoaded('scenes_lo');
+    const loReady = loFresh && !!map.getLayer('fill-lo');
     const n = loReady ? rendered().length : null;
 
     if (loMode){
@@ -1015,10 +1024,16 @@ map.on('load', () => {
   applyFilter(); report();
   loadFacets();
 });
-map.on('idle', report);
+// The footprint count is only trustworthy once everything for this view has
+// loaded and drawn: isSourceLoaded() reads true before any tile has arrived,
+// which reads as "0 matching footprints".
+// Idle can fire right after the source is added, before its first tile has even
+// been requested, so also wait for a tile to actually arrive.
+map.on('sourcedata', e => { if (e.sourceId === 'scenes_lo' && e.tile) loTiles = true; });
+map.on('idle', () => { loFresh = loTiles; report(); });
+map.on('move', () => { loFresh = false; });
 map.on('moveend', () => { sbShown = SB_PAGE; report(); });
 // Low-zoom footprint tiles arrive after the move ends; recount once they do.
-map.on('idle', () => { if (map.getSource('scenes_lo')) report(); });
 </script>
 </body>
 </html>
