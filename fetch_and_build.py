@@ -499,13 +499,25 @@ Setup:
      Credentials are read from the M2M_USERNAME / M2M_TOKEN environment
      variables if set, otherwise you'll be prompted.
 
-Files are saved to ./declass_downloads/. Uses only the Python standard library.
+Each scene gets its own folder under ./declass_downloads/ holding the image
+(unzipped) and, unless switched off below, metadata.json/.txt, a preview image
+and a footprint overlay (KML/KMZ) you can open in Google Earth.
+
+Safe to stop and re-run: finished scenes are skipped, and scenes USGS is still
+preparing are listed in still_queued_ids.txt. Uses only the Python standard
+library.
 """
-import os, sys, json, time, getpass, urllib.request, urllib.error
+import os, re, sys, json, time, getpass, zipfile, urllib.parse, urllib.request, urllib.error
 
 API    = "https://m2m.cr.usgs.gov/api/api/json/stable/"
 OUTDIR = "declass_downloads"
 LABEL  = "declass_map_queue"
+
+EXTRAS           = __EXTRAS__    # metadata.json/.txt, preview image, footprint overlay per scene
+EXTRACT          = __EXTRACT__   # unzip each downloaded product in place
+WAIT_FOR_STAGING = True          # keep checking for scenes USGS is still preparing
+RETRY_INTERVAL   = 120           # seconds between those checks
+MAX_RETRIES      = 15
 
 # Scenes in the download queue:
 SCENES = __SCENES__
@@ -518,7 +530,7 @@ def api(endpoint, payload, token=None):
     if token:
         req.add_header("X-Auth-Token", token)
     try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
+        with urllib.request.urlopen(req, timeout=300) as resp:
             body = json.loads(resp.read())
     except urllib.error.HTTPError as e:
         sys.exit("HTTP %s calling %s: %s" % (e.code, endpoint, e.read().decode(errors="replace")[:300]))
@@ -527,6 +539,106 @@ def api(endpoint, payload, token=None):
     return body.get("data")
 
 
+def batches(items, n=250):
+    for i in range(0, len(items), n):
+        yield items[i:i + n]
+
+
+# -- files ------------------------------------------------------------------
+
+CD_NAME = re.compile(r'filename\*?=(?:UTF-8\'\')?"?([^";]+)"?', re.IGNORECASE)
+
+
+def filename_for(headers, url, eid):
+    """Prefer the server's filename: signed URLs often have no real extension."""
+    m = CD_NAME.search(headers.get("Content-Disposition", "") or "")
+    if m:
+        name = urllib.parse.unquote(m.group(1).strip())
+        if name:
+            return os.path.basename(name)
+    tail = os.path.basename(url.split("?")[0])
+    return tail if "." in tail else eid + ".zip"
+
+
+def fetch(url, folder, eid=None, name=None, retries=4):
+    """Download url into folder with retries. Returns the saved path or None."""
+    os.makedirs(folder, exist_ok=True)
+    for attempt in range(1, retries + 1):
+        try:
+            with urllib.request.urlopen(url, timeout=120) as r:
+                fname = name or filename_for(r.headers, url, eid or "scene")
+                out = os.path.join(folder, fname)
+                if os.path.exists(out) and os.path.getsize(out) > 0:
+                    return out
+                tmp = out + ".part"
+                with open(tmp, "wb") as f:
+                    while True:
+                        chunk = r.read(1 << 20)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                os.replace(tmp, out)
+                return out
+        except Exception as e:
+            if attempt == retries:
+                print("    failed (%s): %s" % (eid or name, e))
+            else:
+                time.sleep(3 * attempt)
+    return None
+
+
+def unzip(path, dest):
+    try:
+        with zipfile.ZipFile(path) as zf:
+            zf.extractall(dest)
+            return len(zf.namelist())
+    except zipfile.BadZipFile:
+        return 0
+
+
+def kml_for(eid, browse_url, geometry):
+    """Fallback overlay: drape the preview over the footprint with gx:LatLonQuad,
+    which copes with the skewed strips a plain LatLonBox would distort."""
+    ring = None
+    if geometry and geometry.get("type") == "Polygon":
+        ring = geometry["coordinates"][0]
+    quad = ""
+    if ring and len(ring) >= 4:
+        quad = "<gx:LatLonQuad><coordinates>%s</coordinates></gx:LatLonQuad>" % " ".join(
+            "%s,%s,0" % (lon, lat) for lon, lat in ring[:4])
+    return ('<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<kml xmlns="http://www.opengis.net/kml/2.2" xmlns:gx="http://www.google.com/kml/ext/2.2">\n'
+            '  <GroundOverlay>\n    <name>%s</name>\n    <Icon><href>%s</href></Icon>\n    %s\n'
+            '  </GroundOverlay>\n</kml>\n' % (eid, browse_url, quad))
+
+
+def save_extras(folder, rec):
+    os.makedirs(folder, exist_ok=True)
+    with open(os.path.join(folder, "metadata.json"), "w", encoding="utf-8") as f:
+        json.dump(rec, f, indent=2, default=str)
+    fields = [(m.get("fieldName"), m.get("value")) for m in (rec.get("metadata") or [])]
+    lines = ["Entity ID: %s" % rec.get("entityId", ""), "Display ID: %s" % rec.get("displayId", ""),
+             "Publish Date: %s" % rec.get("publishDate", ""), ""] + ["%s: %s" % kv for kv in fields]
+    with open(os.path.join(folder, "metadata.txt"), "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+    browse = overlay = None
+    for b in rec.get("browse") or []:
+        browse, overlay = b.get("browsePath"), b.get("overlayPath")
+        if browse or overlay:
+            break
+    if browse:
+        ext = os.path.splitext(browse.split("?")[0])[1] or ".jpg"
+        fetch(browse, folder, name="preview" + ext, retries=3)
+    if overlay:
+        ext = os.path.splitext(overlay.split("?")[0])[1] or ".kmz"
+        fetch(overlay, folder, name="overlay" + ext, retries=3)
+    elif browse:
+        with open(os.path.join(folder, "overlay.kml"), "w", encoding="utf-8") as f:
+            f.write(kml_for(rec.get("entityId", ""), browse, rec.get("spatialCoverage")))
+
+
+# -- main -------------------------------------------------------------------
+
 def main():
     if not SCENES:
         print("Queue is empty - nothing to download.")
@@ -534,69 +646,112 @@ def main():
     user  = os.environ.get("M2M_USERNAME") or input("USGS username: ").strip()
     token = os.environ.get("M2M_TOKEN") or getpass.getpass("M2M application token: ").strip()
 
+    todo = [s for s in SCENES
+            if not os.path.exists(os.path.join(OUTDIR, s["entityId"], ".done"))]
+    skipped = len(SCENES) - len(todo)
+    if skipped:
+        print("%d scene(s) already downloaded - skipping." % skipped)
+    if not todo:
+        print("Nothing left to do.")
+        return
+
     print("Logging in as %s ..." % user)
     api_key = api("login-token", {"username": user, "token": token})
-
     try:
         by_ds = {}
-        for s in SCENES:
+        for s in todo:
             by_ds.setdefault(s["dataset"], []).append(s["entityId"])
 
-        downloads = []
+        downloads, unavailable, ds_of = [], [], {}
         for ds, eids in by_ds.items():
-            print("Fetching download options for %d scene(s) in %s ..." % (len(eids), ds))
-            opts = api("download-options", {"datasetName": ds, "entityIds": eids}, api_key) or []
+            print("Checking %d scene(s) in %s ..." % (len(eids), ds))
             best = {}
-            for o in opts:
-                if not o.get("available"):
-                    continue
-                eid = o.get("entityId")
-                is_bundle = "bundle" in (o.get("productName", "").lower())
-                if eid not in best or (is_bundle and not best[eid][1]):
-                    best[eid] = (o, is_bundle)
+            for chunk in batches(eids):
+                for o in api("download-options", {"datasetName": ds, "entityIds": chunk}, api_key) or []:
+                    eid = o.get("entityId")
+                    if not o.get("available"):
+                        continue
+                    is_bundle = "bundle" in (o.get("productName", "").lower())
+                    if eid not in best or (is_bundle and not best[eid][1]):
+                        best[eid] = (o, is_bundle)
+                time.sleep(0.2)
             for eid in eids:
+                ds_of[eid] = ds
                 if eid in best:
                     downloads.append({"entityId": eid, "productId": best[eid][0]["id"]})
                 else:
-                    print("  ! no downloadable product for %s" % eid)
-
+                    unavailable.append(eid)
+        if unavailable:
+            print("  %d scene(s) have no downloadable product (not scanned yet, or needs "
+                  "ordering on EarthExplorer): %s" % (len(unavailable), ", ".join(unavailable[:20])
+                                                      + (" ..." if len(unavailable) > 20 else "")))
         if not downloads:
-            sys.exit("None of the queued scenes have a downloadable product.")
+            print("None of the queued scenes have a downloadable product right now.")
+            return
+
+        records = {}
+        if EXTRAS:
+            print("Fetching metadata, previews and footprints ...")
+            for ds in by_ds:
+                ok_ids = [d["entityId"] for d in downloads if ds_of.get(d["entityId"]) == ds]
+                for chunk in batches(ok_ids):
+                    try:
+                        for rec in api("scene-metadata-list", {"datasetName": ds, "entityIds": chunk,
+                                                              "metadataType": "full"}, api_key) or []:
+                            records[rec.get("entityId")] = rec
+                    except SystemExit:
+                        print("  metadata unavailable for a batch - continuing without it")
+                    time.sleep(0.2)
 
         print("Requesting %d download(s) ..." % len(downloads))
-        req = api("download-request", {"downloads": downloads, "label": LABEL}, api_key) or {}
-        ready = {}
-        for d in req.get("availableDownloads", []) or []:
-            ready[d["url"]] = d
-        preparing = req.get("preparingDownloads", []) or []
+        ready, pending = {}, []
+        for chunk in batches(downloads):
+            req = api("download-request", {"downloads": chunk, "label": LABEL}, api_key) or {}
+            for d in req.get("availableDownloads") or []:
+                if d.get("url"):
+                    ready[d["entityId"]] = d["url"]
+            for d in (req.get("preparingDownloads") or []) + (req.get("queuedDownloads") or []):
+                pending.append(d["entityId"])
+            time.sleep(0.2)
+        pending = [e for e in dict.fromkeys(pending) if e not in ready]
 
-        if preparing and len(ready) < len(downloads):
-            print("%d download(s) staging; polling up to 10 min ..." % (len(downloads) - len(ready)))
-            deadline = time.time() + 600
-            while time.time() < deadline and len(ready) < len(downloads):
-                time.sleep(10)
-                ret = api("download-retrieve", {"label": LABEL}, api_key) or {}
-                for d in ret.get("available", []) or []:
-                    ready[d["url"]] = d
-                print("  %d/%d ready ..." % (len(ready), len(downloads)))
+        tries = 0
+        while pending and WAIT_FOR_STAGING and tries < MAX_RETRIES:
+            tries += 1
+            print("%d scene(s) still being prepared by USGS. Checking again in %ds (%d/%d) ..."
+                  % (len(pending), RETRY_INTERVAL, tries, MAX_RETRIES))
+            time.sleep(RETRY_INTERVAL)
+            ret = api("download-retrieve", {"label": LABEL}, api_key) or {}
+            for d in ret.get("available") or []:
+                if d.get("url") and d.get("entityId") in pending:
+                    ready[d["entityId"]] = d["url"]
+            pending = [e for e in pending if e not in ready]
 
         os.makedirs(OUTDIR, exist_ok=True)
-        urls = list(ready.keys())
-        print("Downloading %d file(s) to ./%s/ ..." % (len(urls), OUTDIR))
-        for i, url in enumerate(urls, 1):
-            fname = url.split("/")[-1].split("?")[0] or ("scene_%d" % i)
-            dest = os.path.join(OUTDIR, fname)
-            print("  [%d/%d] %s" % (i, len(urls), fname))
-            try:
-                urllib.request.urlretrieve(url, dest)
-            except Exception as e:
-                print("    failed: %s" % e)
+        if pending:
+            with open(os.path.join(OUTDIR, "still_queued_ids.txt"), "w") as f:
+                f.write("\n".join(pending))
+            print("%d scene(s) not ready yet - saved to %s/still_queued_ids.txt. Re-run later."
+                  % (len(pending), OUTDIR))
 
-        missing = len(downloads) - len(urls)
-        if missing > 0:
-            print("Done. %d still staging - re-run later to fetch them." % missing)
-        else:
-            print("Done.")
+        print("Downloading %d scene(s) to ./%s/ (one folder each) ..." % (len(ready), OUTDIR))
+        ok = failed = 0
+        for i, (eid, url) in enumerate(ready.items(), 1):
+            folder = os.path.join(OUTDIR, eid)
+            print("  [%d/%d] %s" % (i, len(ready), eid))
+            path = fetch(url, folder, eid)
+            if not path:
+                failed += 1
+                continue
+            if EXTRACT and path.lower().endswith(".zip"):
+                unzip(path, folder)
+            if EXTRAS and eid in records:
+                save_extras(folder, records[eid])
+            open(os.path.join(folder, ".done"), "w").close()
+            ok += 1
+
+        print("Done. %d downloaded, %d failed, %d unavailable, %d still being prepared."
+              % (ok, failed, len(unavailable), len(pending)))
     finally:
         try:
             api("logout", {}, api_key)
@@ -1248,6 +1403,29 @@ body{{
 #cart-copy{{background:transparent;border-color:#3a3a3a;color:#aaa}}
 #cart-copy:hover{{border-color:#888;color:#fff;background:#2a2a2a}}
 #cart-clear{{background:transparent;border-color:#3a3a3a;color:#888}}
+#cart-csv{{background:transparent;border-color:#3a3a3a;color:#aaa}}
+#cart-csv:hover{{border-color:#888;color:#fff;background:#2a2a2a}}
+#cart-csv:disabled{{opacity:.4;cursor:default}}
+#cart-summary{{font-size:11px;color:#888;margin:-6px 0 12px;line-height:1.6}}
+.cart-range{{background:#242424;border:1px solid #2c2c2c;border-radius:8px;padding:10px 12px;margin-bottom:10px}}
+.cart-range .cr-title{{font-size:12px;color:#ddd;font-weight:500;margin-bottom:7px}}
+.cart-range .cr-row{{display:flex;gap:7px}}
+.cart-range input{{flex:1;min-width:0;background:#1a1a1a;border:1px solid #3a3a3a;color:#ddd;border-radius:7px;
+  padding:7px 9px;font-size:11.5px;font-family:monospace;outline:none}}
+.cart-range input:focus{{border-color:#90caf9}}
+.cart-range button{{background:#2a2a2a;border:1px solid #3a3a3a;color:#ddd;border-radius:7px;padding:7px 12px;
+  font-size:12px;cursor:pointer;font-weight:500;white-space:nowrap}}
+.cart-range button:hover{{background:#333;border-color:#555;color:#fff}}
+#cr-msg{{font-size:11px;color:#888;margin-top:7px;line-height:1.5;min-height:14px}}
+#cr-msg.err{{color:#ef9a9a}}
+#cr-msg.ok{{color:#81c995}}
+.cart-opts{{display:flex;flex-direction:column;gap:6px;margin-bottom:12px}}
+.cart-opts label{{display:flex;align-items:flex-start;gap:7px;font-size:11.5px;color:#999;cursor:pointer;line-height:1.4}}
+.cart-opts input{{accent-color:#e0913f;margin-top:1px}}
+#sb-queue-all{{width:100%;margin-top:9px;background:#2e2418;border:1px solid #e0913f55;color:#ffb74d;
+  padding:7px 10px;border-radius:8px;font-size:12px;cursor:pointer;font-weight:500;font-family:inherit;transition:all .12s}}
+#sb-queue-all:hover{{background:#3a2c1c;border-color:#e0913faa}}
+#sb-queue-all:disabled{{opacity:.4;cursor:default}}
 #cart-clear:hover{{border-color:#ef535088;color:#ef9a9a;background:#2a1a1a}}
 
 /* Popup */
@@ -1552,6 +1730,7 @@ body{{
     <label id="sb-inview-wrap">
       <input type="checkbox" id="sb-inview"> Only scenes in current view
     </label>
+    <button id="sb-queue-all" title="Add every downloadable scene in this list to the download queue">＋ Queue all</button>
   </div>
   <div id="sb-list"></div>
   <button id="sb-more">Load more</button>
@@ -1589,15 +1768,31 @@ body{{
       <h4>Download queue <span id="cart-count-lbl"></span></h4>
       <button id="cart-close" title="Close">✕</button>
     </div>
+    <div id="cart-summary"></div>
     <div id="cart-list"></div>
     <div id="cart-empty">Your download queue is empty.<br>Click a scene and press <strong>＋ Queue</strong>, or add scenes from the List panel.</div>
+    <div class="cart-range">
+      <div class="cr-title">Add a frame range</div>
+      <div class="cr-row">
+        <input id="cr-start" type="text" placeholder="Start ID  e.g. DS1025-1055DA130" autocomplete="off" spellcheck="false">
+        <input id="cr-end" type="text" placeholder="End ID  e.g. DS1025-1055DA144" autocomplete="off" spellcheck="false">
+        <button id="cr-add">Add range</button>
+      </div>
+      <div id="cr-msg">Same mission and camera, consecutive frames. Missing frames are skipped.</div>
+    </div>
+    <div class="cart-opts">
+      <label><input type="checkbox" id="opt-extras" checked> Also save metadata, a preview image and a footprint overlay (KML) for each scene</label>
+      <label><input type="checkbox" id="opt-unzip" checked> Unzip each download</label>
+    </div>
     <div class="cart-note">
-      Builds a Python script that downloads every queued scene from USGS M2M.
+      Builds a Python script that downloads every queued scene from USGS M2M into one folder per scene.
+      It resumes if stopped, and waits for scenes USGS is still preparing.
       You'll need a free M2M application token — <a href="https://ers.cr.usgs.gov/" target="_blank">get one ↗</a>.
       No Python packages required.
     </div>
     <div class="cart-actions">
       <button id="cart-dl-script">⬇ Download script (.py)</button>
+      <button id="cart-csv" title="The queue as a spreadsheet">CSV</button>
       <button id="cart-copy">Copy</button>
       <button id="cart-clear">Clear</button>
     </div>
@@ -2179,7 +2374,7 @@ map.on('click', e => {{
 
 // ── Sidebar: list of the scenes drawn on the map ──────────────────────────────
 const SB_PAGE = 60;
-let sbOpen = false, sbInView = false, sbLimit = SB_PAGE, sbShown = [];
+let sbOpen = false, sbInView = false, sbLimit = SB_PAGE, sbShown = [], sbQueueable = [];
 
 // Cached bbox per feature: [minLng, minLat, maxLng, maxLat]
 function featBBox(f) {{
@@ -2231,6 +2426,10 @@ function updateSidebar(resetPage) {{
   feats.sort(SB_SORTS[document.getElementById('sb-sort').value] || SB_SORTS['date-desc']);
 
   document.getElementById('sb-title').textContent = sbInView ? 'Scenes in view' : 'Scenes on map';
+  sbQueueable = feats.filter(f => f.properties.scanned !== false);
+  const qb = document.getElementById('sb-queue-all');
+  qb.textContent = '＋ Queue all ' + sbQueueable.length.toLocaleString() + ' downloadable';
+  qb.disabled = !sbQueueable.length;
   document.getElementById('sb-count').textContent =
     feats.length.toLocaleString() + ' scene' + (feats.length === 1 ? '' : 's');
 
@@ -2346,6 +2545,22 @@ function cartAdd(p) {{
   cartSave(); updateCartUI();
 }}
 function cartRemove(eid) {{ cart.delete(eid); cartSave(); updateCartUI(); }}
+// Adding thousands one at a time would rewrite localStorage each time.
+function cartAddMany(props) {{
+  let added = 0, already = 0, unscanned = 0;
+  for (const p of props) {{
+    if (!p) continue;
+    if (p.scanned === false) {{ unscanned++; continue; }}
+    if (cart.has(p.entityId)) {{ already++; continue; }}
+    cart.set(p.entityId, {{
+      entityId: p.entityId, dataset: p.dataset,
+      satellite: p.satellite || '', acquisitionDate: (p.acquisitionDate || '').slice(0, 10)
+    }});
+    added++;
+  }}
+  cartSave(); updateCartUI();
+  return {{added, already, unscanned}};
+}}
 function cartToggle(p) {{ if (cartHas(p.entityId)) cartRemove(p.entityId); else cartAdd(p); }}
 
 function reflectCartBtn(btn) {{
@@ -2375,6 +2590,13 @@ function renderCart() {{
   document.getElementById('cart-count-lbl').textContent = items.length ? '(' + items.length + ')' : '';
   document.getElementById('cart-dl-script').disabled = !items.length;
   document.getElementById('cart-copy').disabled = !items.length;
+  document.getElementById('cart-csv').disabled = !items.length;
+  const byDs = {{}};
+  items.forEach(s => {{ byDs[s.dataset] = (byDs[s.dataset] || 0) + 1; }});
+  document.getElementById('cart-summary').textContent = items.length
+    ? Object.entries(byDs).map(([d, n]) =>
+        n.toLocaleString() + ' in ' + (DS_LABELS[d] || d).split('—')[0].trim()).join(' · ')
+    : '';
   document.getElementById('cart-empty').style.display = items.length ? 'none' : 'block';
   list.innerHTML = items.map(s => {{
     const dsShort = (DS_LABELS[s.dataset] || s.dataset).split('—')[0].trim();
@@ -2407,10 +2629,85 @@ document.getElementById('cart-clear').addEventListener('click', () => {{
 function buildCartScript() {{
   const scenes = [...cart.values()].map(s => ({{entityId: s.entityId, dataset: s.dataset}}));
   const stamp = new Date().toISOString().slice(0, 19).replace('T', ' ') + ' UTC';
+  const py = on => on ? 'True' : 'False';
   return DL_SCRIPT_TEMPLATE
     .split('__SCENES__').join(JSON.stringify(scenes, null, 2))
+    .split('__EXTRAS__').join(py(document.getElementById('opt-extras').checked))
+    .split('__EXTRACT__').join(py(document.getElementById('opt-unzip').checked))
     .split('__GENERATED__').join(stamp);
 }}
+
+// ── Bulk add: a whole result list, or a run of consecutive frames ─────────────
+document.getElementById('sb-queue-all').addEventListener('click', () => {{
+  const n = sbQueueable.length;
+  if (!n) return;
+  if (n > 1000 && !confirm('Add all ' + n.toLocaleString() + ' scenes to the download queue? ' +
+      'Large batches can take hours to download.')) return;
+  const r = cartAddMany(sbQueueable.map(f => f.properties));
+  const qb = document.getElementById('sb-queue-all');
+  qb.textContent = '✓ Queued ' + r.added.toLocaleString() + (r.already ? ' (+' + r.already.toLocaleString() + ' already)' : '');
+  setTimeout(() => updateSidebar(false), 1800);
+}});
+
+let entityIdx = null;
+function entityIndex() {{
+  if (!entityIdx || entityIdx.size !== GEOJSON.features.length) {{
+    entityIdx = new Map();
+    for (const f of GEOJSON.features) entityIdx.set(f.properties.entityId, f.properties);
+  }}
+  return entityIdx;
+}}
+// DS1025-1055DA144 -> prefix "DS1025-1055DA" + frame 144. Everything before the
+// trailing digits has to match, which keeps a range inside one mission+camera.
+function splitFrameId(id) {{
+  const m = /^(.*?)(\\d+)$/.exec((id || '').trim().toUpperCase());
+  return m ? {{prefix: m[1], num: m[2]}} : null;
+}}
+function addIdRange(startId, endId) {{
+  const a = splitFrameId(startId), b = splitFrameId(endId);
+  if (!a || !b) return {{err: 'Enter two entity IDs that end in a frame number, like DS1025-1055DA144.'}};
+  if (a.prefix !== b.prefix)
+    return {{err: 'Those are different missions or cameras (' + a.prefix + ' vs ' + b.prefix +
+                 '). Add one run at a time.'}};
+  if (!GEOJSON.features.length) return {{err: 'Scene data is still loading — try again in a moment.'}};
+  const lo = parseInt(a.num, 10), hi = parseInt(b.num, 10);
+  if (Math.abs(hi - lo) > 5000) return {{err: 'That range is over 5,000 frames — narrow it down.'}};
+  const pad = Math.max(a.num.length, b.num.length), step = hi >= lo ? 1 : -1;
+  const idx = entityIndex(), found = [];
+  let missing = 0;
+  for (let n = lo; n !== hi + step; n += step) {{
+    const p = idx.get(a.prefix + String(n).padStart(pad, '0'));
+    if (p) found.push(p); else missing++;
+  }}
+  if (!found.length) return {{err: 'None of those frames are in the archive.'}};
+  const r = cartAddMany(found);
+  return {{...r, missing}};
+}}
+document.getElementById('cr-add').addEventListener('click', () => {{
+  const msg = document.getElementById('cr-msg');
+  const r = addIdRange(document.getElementById('cr-start').value, document.getElementById('cr-end').value);
+  if (r.err) {{ msg.textContent = r.err; msg.className = 'err'; return; }}
+  msg.className = 'ok';
+  msg.textContent = 'Added ' + r.added.toLocaleString() + ' scene' + (r.added === 1 ? '' : 's') +
+    (r.already ? ', ' + r.already + ' already queued' : '') +
+    (r.unscanned ? ', ' + r.unscanned + ' not scanned yet (skipped)' : '') +
+    (r.missing ? ', ' + r.missing + ' frame number' + (r.missing === 1 ? '' : 's') + ' not in the archive' : '') + '.';
+}});
+['cr-start', 'cr-end'].forEach(id => document.getElementById(id).addEventListener('keydown', e => {{
+  if (e.key === 'Enter') document.getElementById('cr-add').click();
+}}));
+document.getElementById('cart-csv').addEventListener('click', () => {{
+  if (!cart.size) return;
+  const q = v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+  const rows = [['entityId', 'dataset', 'satellite', 'acquisitionDate', 'earthExplorer']].concat(
+    [...cart.values()].map(s => [s.entityId, s.dataset, s.satellite, s.acquisitionDate, eeUrl(s)]));
+  const blob = new Blob([rows.map(r => r.map(q).join(',')).join('\\r\\n')], {{type: 'text/csv'}});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'declass_download_queue.csv';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}});
 document.getElementById('cart-dl-script').addEventListener('click', () => {{
   if (!cart.size) return;
   const blob = new Blob([buildCartScript()], {{type: 'text/x-python'}});
@@ -3638,7 +3935,7 @@ function visibleAngle(altitude) {{
   return Math.max(0, Math.min(theta, horizon));
 }}
 
-function featsInView(pov) {{
+function globeFeatsInView(pov) {{
   const cosH = Math.cos(visibleAngle(pov.altitude));
   const la1 = pov.lat * Math.PI / 180, lo1 = pov.lng * Math.PI / 180;
   const s1 = Math.sin(la1), c1 = Math.cos(la1);
@@ -3667,7 +3964,7 @@ function refreshGlobeLayers() {{
   }}
 
   const pov = globeInstance.pointOfView();
-  const inView = featsInView(pov);
+  const inView = globeFeatsInView(pov);
   if (inView.length <= GLOBE_POLY_CAP) {{
     globeInstance.heatmapsData([]).htmlElementsData([]).polygonsData(inView);
     globeLayerMode = 'polygons';
