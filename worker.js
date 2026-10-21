@@ -131,9 +131,75 @@ async function proxyBrowse(request, url, ctx) {
   return out;
 }
 
+// USGS's M2M API sends no CORS headers, so a page on another origin can make
+// the request but never read the answer — the in-page downloader would fail at
+// the first login. These two routes forward its calls from our own origin.
+//
+// Both are narrow on purpose: only listed M2M endpoints, and only *.usgs.gov
+// download hosts, so neither can be used as a general open proxy. Credentials
+// pass through in the request body and are never stored or logged here.
+const M2M_BASE = 'https://m2m.cr.usgs.gov/api/api/json/stable/';
+const M2M_ENDPOINTS = new Set([
+  'login-token', 'logout', 'dataset-search', 'download-options',
+  'download-request', 'download-retrieve', 'scene-metadata-list',
+]);
+
+async function proxyM2M(request, url) {
+  if (request.method !== 'POST') return new Response('Method not allowed', { status: 405 });
+  const endpoint = url.pathname.slice('/m2m/'.length);
+  if (!M2M_ENDPOINTS.has(endpoint)) return new Response('Not found', { status: 404 });
+  const origin = request.headers.get('Origin');
+  if (origin && !ALLOWED_ORIGINS.has(origin)) return new Response('Forbidden', { status: 403 });
+
+  const body = await request.text();
+  if (body.length > 1_000_000) return new Response('Request too large', { status: 413 });
+
+  const headers = { 'Content-Type': 'application/json' };
+  const key = request.headers.get('X-Auth-Token');
+  if (key) headers['X-Auth-Token'] = key;
+
+  const res = await fetch(M2M_BASE + endpoint, { method: 'POST', headers, body });
+  return new Response(res.body, {
+    status: res.status,
+    headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
+  });
+}
+
+// Streams a file from a USGS download host. Needed when the host sends no CORS
+// headers, which would stop the page writing the bytes into a chosen folder.
+async function proxyDownload(request, url) {
+  if (request.method !== 'GET') return new Response('Method not allowed', { status: 405 });
+  const origin = request.headers.get('Origin');
+  if (origin && !ALLOWED_ORIGINS.has(origin)) return new Response('Forbidden', { status: 403 });
+
+  let target;
+  try { target = new URL(url.searchParams.get('u') || ''); }
+  catch { return new Response('Bad url', { status: 400 }); }
+  if (target.protocol !== 'https:' || !/(^|\.)usgs\.gov$/i.test(target.hostname)) {
+    return new Response('Host not allowed', { status: 403 });
+  }
+
+  const headers = {};
+  const range = request.headers.get('Range');
+  if (range) headers['Range'] = range;
+  const res = await fetch(target.toString(), { headers });
+
+  const out = new Headers();
+  for (const h of ['content-type', 'content-length', 'content-disposition',
+                   'content-range', 'accept-ranges']) {
+    const v = res.headers.get(h);
+    if (v) out.set(h, v);
+  }
+  out.set('cache-control', 'no-store');
+  return new Response(res.body, { status: res.status, headers: out });
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+
+    if (url.pathname.startsWith('/m2m/')) return proxyM2M(request, url);
+    if (url.pathname === '/dl') return proxyDownload(request, url);
 
     if (url.pathname.startsWith('/img/')) {
       if (request.method !== 'GET' && request.method !== 'HEAD') {

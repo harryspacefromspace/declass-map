@@ -1406,6 +1406,34 @@ body{{
 #cart-csv{{background:transparent;border-color:#3a3a3a;color:#aaa}}
 #cart-csv:hover{{border-color:#888;color:#fff;background:#2a2a2a}}
 #cart-csv:disabled{{opacity:.4;cursor:default}}
+#bd{{background:#242424;border:1px solid #2c2c2c;border-radius:8px;padding:11px 12px;margin-bottom:12px}}
+#bd .bd-title{{font-size:12px;color:#ddd;font-weight:500;margin-bottom:8px}}
+#bd-nofolder{{display:none;font-size:11px;color:#ffa726;line-height:1.5;margin-bottom:8px}}
+.bd-folderrow{{display:flex;align-items:center;gap:9px;margin-bottom:8px}}
+.bd-folderrow button,#bd-stop{{background:#2a2a2a;border:1px solid #3a3a3a;color:#ddd;border-radius:7px;padding:7px 12px;
+  font-size:12px;cursor:pointer;font-weight:500;white-space:nowrap;font-family:inherit}}
+.bd-folderrow button:hover,#bd-stop:hover:not(:disabled){{background:#333;border-color:#555;color:#fff}}
+#bd-folder{{font-size:12px;color:#777;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
+#bd-folder.set{{color:#81c995}}
+.bd-creds{{display:flex;gap:7px;margin-bottom:7px}}
+.bd-creds input{{flex:1;min-width:0;background:#1a1a1a;border:1px solid #3a3a3a;color:#ddd;border-radius:7px;
+  padding:7px 9px;font-size:12px;outline:none;font-family:inherit}}
+.bd-creds input:focus{{border-color:#90caf9}}
+.bd-rem{{display:flex;align-items:center;gap:7px;font-size:11px;color:#888;cursor:pointer;margin-bottom:10px}}
+.bd-rem input{{accent-color:#e0913f}}
+.bd-go{{display:flex;gap:8px}}
+#bd-start{{flex:1;background:#2e2418;border:1px solid #e0913f66;color:#ffb74d;border-radius:8px;padding:9px 14px;
+  font-size:13px;cursor:pointer;font-weight:500;font-family:inherit;transition:all .15s}}
+#bd-start:hover:not(:disabled){{background:#3a2c1c;border-color:#e0913faa}}
+#bd-start:disabled,#bd-stop:disabled{{opacity:.4;cursor:default}}
+#bd-bar{{height:5px;background:#1a1a1a;border-radius:3px;overflow:hidden;margin-top:10px}}
+#bd-bar i{{display:block;height:100%;width:0;background:#e0913f;transition:width .25s linear}}
+#bd-status{{font-size:11.5px;color:#aaa;margin-top:8px;line-height:1.5;word-break:break-word;min-height:15px}}
+#bd-status.err{{color:#ef9a9a}}
+#bd-status.ok{{color:#81c995}}
+#bd-log{{font-size:10.5px;color:#777;font-family:monospace;max-height:80px;overflow-y:auto;margin-top:5px;line-height:1.5}}
+#cart-dl-script{{flex:none;background:transparent;border-color:#3a3a3a;color:#aaa}}
+#cart-dl-script:hover{{border-color:#888;color:#fff;background:#2a2a2a}}
 #cart-summary{{font-size:11px;color:#888;margin:-6px 0 12px;line-height:1.6}}
 .cart-range{{background:#242424;border:1px solid #2c2c2c;border-radius:8px;padding:10px 12px;margin-bottom:10px}}
 .cart-range .cr-title{{font-size:12px;color:#ddd;font-weight:500;margin-bottom:7px}}
@@ -1782,16 +1810,35 @@ body{{
     </div>
     <div class="cart-opts">
       <label><input type="checkbox" id="opt-extras" checked> Also save metadata, a preview image and a footprint overlay (KML) for each scene</label>
-      <label><input type="checkbox" id="opt-unzip" checked> Unzip each download</label>
+      <label><input type="checkbox" id="opt-unzip" checked> Unzip each download (script only; the in-browser download keeps the .zip)</label>
+    </div>
+    <div id="bd">
+      <div class="bd-title">Download to a folder</div>
+      <div id="bd-nofolder">Choosing a folder needs Chrome or Edge. In this browser the files go to your normal Downloads folder, one after another.</div>
+      <div class="bd-folderrow">
+        <button id="bd-pick">📁 Choose folder…</button>
+        <span id="bd-folder">No folder chosen</span>
+      </div>
+      <div class="bd-creds">
+        <input id="bd-user" type="text" placeholder="USGS username" autocomplete="username" spellcheck="false">
+        <input id="bd-token" type="password" placeholder="M2M application token" autocomplete="off">
+      </div>
+      <label class="bd-rem"><input type="checkbox" id="bd-remember"> Remember my login in this browser</label>
+      <div class="bd-go">
+        <button id="bd-start">⬇ Download all</button>
+        <button id="bd-stop" disabled>Stop</button>
+      </div>
+      <div id="bd-bar"><i></i></div>
+      <div id="bd-status"></div>
+      <div id="bd-log"></div>
     </div>
     <div class="cart-note">
-      Builds a Python script that downloads every queued scene from USGS M2M into one folder per scene.
-      It resumes if stopped, and waits for scenes USGS is still preparing.
+      Downloads each queued scene from USGS M2M into its own folder. It skips scenes already in the folder, so you can stop and carry on later.
       You'll need a free M2M application token — <a href="https://ers.cr.usgs.gov/" target="_blank">get one ↗</a>.
-      No Python packages required.
+      Prefer to run it on your own machine? The script does the same with no packages required.
     </div>
     <div class="cart-actions">
-      <button id="cart-dl-script">⬇ Download script (.py)</button>
+      <button id="cart-dl-script">Script (.py)</button>
       <button id="cart-csv" title="The queue as a spreadsheet">CSV</button>
       <button id="cart-copy">Copy</button>
       <button id="cart-clear">Clear</button>
@@ -2591,6 +2638,11 @@ function renderCart() {{
   document.getElementById('cart-dl-script').disabled = !items.length;
   document.getElementById('cart-copy').disabled = !items.length;
   document.getElementById('cart-csv').disabled = !items.length;
+  const bs = document.getElementById('bd-start');
+  if (bs) {{
+    bs.disabled = !items.length || bd.running;
+    bs.textContent = bd.running ? 'Downloading…' : '⬇ Download all ' + items.length.toLocaleString();
+  }}
   const byDs = {{}};
   items.forEach(s => {{ byDs[s.dataset] = (byDs[s.dataset] || 0) + 1; }});
   document.getElementById('cart-summary').textContent = items.length
@@ -2636,6 +2688,320 @@ function buildCartScript() {{
     .split('__EXTRACT__').join(py(document.getElementById('opt-unzip').checked))
     .split('__GENERATED__').join(stamp);
 }}
+
+// ── Download the queue straight from the browser, into a chosen folder ────────
+// Chrome and Edge can write into a folder the user picks (File System Access
+// API); elsewhere the files go to the browser's normal download location.
+// USGS sends no CORS headers, so API calls go through our /m2m/ proxy and, if a
+// download host refuses cross-origin reads too, the file comes via /dl.
+const BD_OK = typeof window.showDirectoryPicker === 'function';
+const bd = {{root: null, running: false, stop: false, abort: null, extras: true}};
+const $bd = id => document.getElementById(id);
+const bdSleep = ms => new Promise(r => setTimeout(r, ms));
+const bdBatches = (a, n = 250) => {{ const o = []; for (let i = 0; i < a.length; i += n) o.push(a.slice(i, i + n)); return o; }};
+const bdSafe = n => String(n).replace(/[\\\\/:*?"<>|]/g, '_');
+
+// A folder handle can be stored in IndexedDB, so the choice survives a reload.
+function bdIdb() {{
+  return new Promise((res, rej) => {{
+    const r = indexedDB.open('declass_bd', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('h');
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  }});
+}}
+async function bdSaveHandle(h) {{
+  try {{ const db = await bdIdb(); db.transaction('h', 'readwrite').objectStore('h').put(h, 'root'); }} catch (e) {{}}
+}}
+async function bdLoadHandle() {{
+  try {{
+    const db = await bdIdb();
+    return await new Promise(res => {{
+      const q = db.transaction('h').objectStore('h').get('root');
+      q.onsuccess = () => res(q.result || null);
+      q.onerror = () => res(null);
+    }});
+  }} catch (e) {{ return null; }}
+}}
+function bdShowFolder() {{
+  $bd('bd-folder').textContent = bd.root ? bd.root.name : 'No folder chosen';
+  $bd('bd-folder').classList.toggle('set', !!bd.root);
+}}
+async function bdPick() {{
+  try {{
+    bd.root = await window.showDirectoryPicker({{id: 'declass-downloads', mode: 'readwrite', startIn: 'downloads'}});
+    bdSaveHandle(bd.root);
+    bdShowFolder();
+    bdStatus('');
+  }} catch (e) {{ /* cancelled */ }}
+}}
+async function bdEnsurePermission() {{
+  if (!bd.root) return false;
+  const opts = {{mode: 'readwrite'}};
+  if ((await bd.root.queryPermission(opts)) === 'granted') return true;
+  return (await bd.root.requestPermission(opts)) === 'granted';
+}}
+
+function bdStatus(msg, cls) {{ const e = $bd('bd-status'); e.textContent = msg; e.className = cls || ''; }}
+function bdLog(msg) {{
+  const l = $bd('bd-log'), d = document.createElement('div');
+  d.textContent = msg; l.appendChild(d);
+  while (l.childElementCount > 200) l.removeChild(l.firstChild);
+  l.scrollTop = l.scrollHeight;
+}}
+function bdBar(frac) {{
+  $bd('bd-bar').firstElementChild.style.width = Math.round(Math.max(0, Math.min(1, frac)) * 100) + '%';
+}}
+
+async function bdApi(endpoint, payload, key) {{
+  const headers = {{'Content-Type': 'application/json'}};
+  if (key) headers['X-Auth-Token'] = key;
+  const r = await fetch('/m2m/' + endpoint, {{method: 'POST', headers, body: JSON.stringify(payload)}});
+  if (!r.ok) throw new Error('HTTP ' + r.status + ' on ' + endpoint);
+  const d = await r.json();
+  if (d.errorCode) throw new Error(d.errorMessage || d.errorCode);
+  return d.data;
+}}
+
+// Direct first (no load on our side); the proxy only if the browser refuses.
+async function bdFetch(url, signal) {{
+  try {{
+    const r = await fetch(url, {{signal}});
+    if (r.ok || (r.status >= 400 && r.status < 500)) return r;
+  }} catch (e) {{ if (e.name === 'AbortError') throw e; }}
+  return fetch('/dl?u=' + encodeURIComponent(url), {{signal}});
+}}
+function bdName(res, url, eid) {{
+  const cd = res.headers.get('Content-Disposition') || '';
+  const m = /filename\\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(cd);
+  if (m) {{ try {{ return bdSafe(decodeURIComponent(m[1].trim())); }} catch (e) {{ return bdSafe(m[1].trim()); }} }}
+  const tail = url.split('?')[0].split('/').pop();
+  return bdSafe(tail.indexOf('.') > 0 ? tail : eid + '.zip');
+}}
+async function bdWrite(dir, name, data) {{
+  const fh = await dir.getFileHandle(name, {{create: true}});
+  const w = await fh.createWritable();
+  await w.write(data);
+  await w.close();
+}}
+async function bdSceneDone(eid) {{
+  if (!BD_OK || !bd.root) return false;
+  try {{ const d = await bd.root.getDirectoryHandle(eid); await d.getFileHandle('.done'); return true; }}
+  catch (e) {{ return false; }}
+}}
+function bdKml(eid, browseUrl, geom) {{
+  let quad = '';
+  if (geom && geom.type === 'Polygon' && geom.coordinates[0].length >= 4) {{
+    quad = '<gx:LatLonQuad><coordinates>' +
+      geom.coordinates[0].slice(0, 4).map(c => c[0] + ',' + c[1] + ',0').join(' ') +
+      '</coordinates></gx:LatLonQuad>';
+  }}
+  return '<?xml version="1.0" encoding="UTF-8"?>\\n' +
+    '<kml xmlns="http://www.opengis.net/kml/2.2" xmlns:gx="http://www.google.com/kml/ext/2.2">\\n' +
+    '  <GroundOverlay>\\n    <name>' + eid + '</name>\\n    <Icon><href>' + browseUrl + '</href></Icon>\\n    ' +
+    quad + '\\n  </GroundOverlay>\\n</kml>\\n';
+}}
+async function bdSaveExtras(dir, rec) {{
+  await bdWrite(dir, 'metadata.json', JSON.stringify(rec, null, 2));
+  const fields = (rec.metadata || []).map(m => m.fieldName + ': ' + m.value);
+  await bdWrite(dir, 'metadata.txt', ['Entity ID: ' + (rec.entityId || ''), 'Display ID: ' + (rec.displayId || ''),
+    'Publish Date: ' + (rec.publishDate || ''), ''].concat(fields).join('\\n'));
+  let browse = null, overlay = null;
+  for (const b of rec.browse || []) {{ browse = b.browsePath; overlay = b.overlayPath; if (browse || overlay) break; }}
+  const extOf = (u, d) => ((u.split('?')[0].match(/\\.[A-Za-z0-9]+$/) || [d])[0]);
+  if (browse) {{
+    try {{
+      // Browse images come through the existing same-origin /img/ proxy.
+      const r = await fetch('/img/' + browse.replace(/^https?:\\/\\/[^/]+\\//, ''));
+      if (r.ok) await bdWrite(dir, 'preview' + extOf(browse, '.jpg'), await r.blob());
+    }} catch (e) {{}}
+  }}
+  try {{
+    if (overlay) {{
+      const r = await bdFetch(overlay);
+      if (r.ok) await bdWrite(dir, 'overlay' + extOf(overlay, '.kmz'), await r.blob());
+    }} else if (browse) {{
+      await bdWrite(dir, 'overlay.kml', bdKml(rec.entityId || '', browse, rec.spatialCoverage));
+    }}
+  }} catch (e) {{}}
+}}
+
+async function bdDownloadScene(eid, url, rec, onBytes) {{
+  if (!BD_OK) {{   // no folder access: hand the URL to the browser's own downloader
+    const a = document.createElement('a');
+    a.href = url; a.download = ''; a.target = '_blank';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    await bdSleep(1500);
+    return;
+  }}
+  const dir = await bd.root.getDirectoryHandle(eid, {{create: true}});
+  bd.abort = new AbortController();
+  const res = await bdFetch(url, bd.abort.signal);
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  const name = bdName(res, url, eid);
+  const total = Number(res.headers.get('Content-Length')) || 0;
+  const fh = await dir.getFileHandle(name, {{create: true}});
+  const w = await fh.createWritable();      // written to a temp file, committed on close
+  let got = 0;
+  const counter = new TransformStream({{transform(chunk, ctl) {{
+    got += chunk.byteLength; onBytes(got, total); ctl.enqueue(chunk);
+  }}}});
+  await res.body.pipeThrough(counter).pipeTo(w);    // closes (or aborts) the writable itself
+  if (bd.extras && rec) await bdSaveExtras(dir, rec);
+  await bdWrite(dir, '.done', '');
+}}
+
+async function bdRun(items, user, token) {{
+  const todo = [];
+  for (const s of items) if (!(await bdSceneDone(s.entityId))) todo.push(s);
+  const skipped = items.length - todo.length;
+  if (skipped) bdLog(skipped.toLocaleString() + ' scene(s) already in that folder - skipping.');
+  if (!todo.length) {{ bdStatus('Everything in the queue is already in that folder.', 'ok'); return; }}
+
+  bdStatus('Logging in…');
+  const key = await bdApi('login-token', {{username: user, token}});
+  try {{
+    const byDs = {{}};
+    todo.forEach(s => (byDs[s.dataset] = byDs[s.dataset] || []).push(s.entityId));
+    const downloads = [], unavailable = [], dsOf = {{}};
+    for (const ds of Object.keys(byDs)) {{
+      const eids = byDs[ds], best = {{}};
+      bdStatus('Checking ' + eids.length.toLocaleString() + ' scene(s) in ' + ds + '…');
+      for (const chunk of bdBatches(eids)) {{
+        if (bd.stop) return;
+        const opts = (await bdApi('download-options', {{datasetName: ds, entityIds: chunk}}, key)) || [];
+        for (const o of opts) {{
+          if (!o.available) continue;
+          const bundle = /bundle/i.test(o.productName || ''), cur = best[o.entityId];
+          if (!cur || (bundle && !cur.bundle)) best[o.entityId] = {{o, bundle}};
+        }}
+        await bdSleep(200);
+      }}
+      for (const eid of eids) {{
+        dsOf[eid] = ds;
+        if (best[eid]) downloads.push({{entityId: eid, productId: best[eid].o.id}}); else unavailable.push(eid);
+      }}
+    }}
+    if (unavailable.length)
+      bdLog(unavailable.length + ' scene(s) have no downloadable product yet: ' +
+            unavailable.slice(0, 10).join(', ') + (unavailable.length > 10 ? ' …' : ''));
+    if (!downloads.length) {{ bdStatus('None of the queued scenes have a downloadable product right now.', 'err'); return; }}
+
+    const records = {{}};
+    if (bd.extras && BD_OK) {{
+      bdStatus('Fetching metadata, previews and footprints…');
+      for (const ds of Object.keys(byDs)) {{
+        const ids = downloads.filter(d => dsOf[d.entityId] === ds).map(d => d.entityId);
+        for (const chunk of bdBatches(ids)) {{
+          try {{
+            ((await bdApi('scene-metadata-list', {{datasetName: ds, entityIds: chunk, metadataType: 'full'}}, key)) || [])
+              .forEach(r => {{ records[r.entityId] = r; }});
+          }} catch (e) {{ bdLog('Metadata unavailable for a batch - continuing without it.'); }}
+          await bdSleep(200);
+        }}
+      }}
+    }}
+
+    bdStatus('Requesting ' + downloads.length.toLocaleString() + ' download(s)…');
+    const label = 'declass-' + Date.now().toString(36);
+    const ready = [], pending = new Set(), have = new Set();
+    for (const chunk of bdBatches(downloads)) {{
+      const r = (await bdApi('download-request', {{downloads: chunk, label}}, key)) || {{}};
+      (r.availableDownloads || []).forEach(d => {{
+        if (d.url && !have.has(d.entityId)) {{ have.add(d.entityId); ready.push({{eid: d.entityId, url: d.url}}); }}
+      }});
+      (r.preparingDownloads || []).concat(r.queuedDownloads || []).forEach(d => {{
+        if (!have.has(d.entityId)) pending.add(d.entityId);
+      }});
+      await bdSleep(200);
+    }}
+    have.forEach(e => pending.delete(e));
+
+    let lastPoll = Date.now(), polls = 0;
+    const poll = async () => {{
+      lastPoll = Date.now(); polls++;
+      const r = (await bdApi('download-retrieve', {{label}}, key)) || {{}};
+      (r.available || []).forEach(d => {{
+        if (d.url && pending.has(d.entityId)) {{ pending.delete(d.entityId); ready.push({{eid: d.entityId, url: d.url}}); }}
+      }});
+    }};
+
+    const total = ready.length + pending.size;
+    let done = 0, failed = 0;
+    while (!bd.stop && (ready.length || pending.size)) {{
+      if (!ready.length) {{
+        if (polls >= 120) break;      // about an hour of waiting on USGS
+        bdStatus(pending.size + ' scene(s) still being prepared by USGS - checking every 30s…');
+        await bdSleep(30000);
+        if (!bd.stop) await poll();
+        continue;
+      }}
+      const {{eid, url}} = ready.shift(), n = done + failed + 1;
+      bdStatus('Downloading ' + eid + ' (' + n + ' of ' + total + ')');
+      try {{
+        await bdDownloadScene(eid, url, records[eid], (got, tot) => {{
+          const mb = (got / 1048576).toFixed(0), t = tot ? ' of ' + (tot / 1048576).toFixed(0) : '';
+          bdStatus('Downloading ' + eid + ' (' + n + ' of ' + total + ') - ' + mb + t + ' MB');
+          bdBar((done + failed + (tot ? got / tot : 0)) / total);
+        }});
+        done++;
+      }} catch (e) {{
+        if (bd.stop) break;
+        failed++; bdLog('Failed ' + eid + ': ' + e.message);
+      }}
+      bdBar((done + failed) / total);
+      if (pending.size && Date.now() - lastPoll > 30000) await poll();
+    }}
+
+    const left = ready.map(r => r.eid).concat([...pending]);
+    if (left.length && BD_OK && bd.root) {{
+      try {{ await bdWrite(bd.root, 'still_queued_ids.txt', left.join('\\n')); }} catch (e) {{}}
+    }}
+    const parts = [done + ' downloaded'];
+    if (failed) parts.push(failed + ' failed');
+    if (unavailable.length) parts.push(unavailable.length + ' unavailable');
+    if (left.length) parts.push(left.length + ' not finished' + (BD_OK ? ' (listed in still_queued_ids.txt)' : ''));
+    bdStatus((bd.stop ? 'Stopped. ' : 'Done. ') + parts.join(', ') + '.', bd.stop || failed ? '' : 'ok');
+  }} finally {{
+    try {{ await bdApi('logout', {{}}, key); }} catch (e) {{}}
+  }}
+}}
+
+async function bdStart() {{
+  if (bd.running || !cart.size) return;
+  if (BD_OK) {{
+    if (!bd.root) {{ bdStatus('Choose a download folder first.', 'err'); return; }}
+    if (!(await bdEnsurePermission())) {{ bdStatus('Folder access was not granted.', 'err'); return; }}
+  }}
+  const user = $bd('bd-user').value.trim(), token = $bd('bd-token').value.trim();
+  if (!user || !token) {{ bdStatus('Enter your USGS username and M2M application token.', 'err'); return; }}
+  try {{
+    if ($bd('bd-remember').checked) localStorage.setItem('m2m_creds', JSON.stringify({{user, token}}));
+    else localStorage.removeItem('m2m_creds');
+  }} catch (e) {{}}
+  bd.running = true; bd.stop = false; bd.extras = $bd('opt-extras').checked;
+  $bd('bd-log').textContent = ''; bdBar(0);
+  $bd('bd-stop').disabled = false;
+  renderCart();
+  try {{ await bdRun([...cart.values()], user, token); }}
+  catch (e) {{ if (!bd.stop) {{ bdStatus('Error: ' + e.message, 'err'); bdLog('Error: ' + e.message); }} }}
+  finally {{ bd.running = false; $bd('bd-stop').disabled = true; renderCart(); }}
+}}
+
+$bd('bd-pick').addEventListener('click', bdPick);
+$bd('bd-start').addEventListener('click', bdStart);
+$bd('bd-stop').addEventListener('click', () => {{ bd.stop = true; if (bd.abort) bd.abort.abort(); }});
+$bd('bd-pick').style.display = BD_OK ? '' : 'none';
+$bd('bd-folder').style.display = BD_OK ? '' : 'none';
+$bd('bd-nofolder').style.display = BD_OK ? 'none' : 'block';
+document.getElementById('cart-btn').addEventListener('click', () => {{
+  try {{
+    const saved = JSON.parse(localStorage.getItem('m2m_creds') || 'null');
+    if (saved) {{ $bd('bd-user').value = saved.user || ''; $bd('bd-token').value = saved.token || ''; $bd('bd-remember').checked = true; }}
+  }} catch (e) {{}}
+}});
+if (BD_OK) bdLoadHandle().then(h => {{ if (h) {{ bd.root = h; bdShowFolder(); }} }});
+bdShowFolder();
 
 // ── Bulk add: a whole result list, or a run of consecutive frames ─────────────
 document.getElementById('sb-queue-all').addEventListener('click', () => {{
@@ -3606,7 +3972,7 @@ document.querySelectorAll('.ov-btn').forEach(btn =>
 );
 
 // ── M2M Download ──────────────────────────────────────────────────────────────
-const M2M = 'https://m2m.cr.usgs.gov/api/api/json/stable/';
+const M2M = '/m2m/';   // same-origin proxy: USGS sends no CORS headers
 async function m2mPost(endpoint, body, apiKey) {{
   const headers = {{'Content-Type':'application/json'}};
   if (apiKey) headers['X-Auth-Token'] = apiKey;
