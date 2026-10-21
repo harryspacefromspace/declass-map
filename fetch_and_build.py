@@ -999,11 +999,11 @@ body{{
 }}
 #sb-title{{font-size:13px;color:#fff;font-weight:500}}
 #sb-count{{font-size:11px;color:#666;margin-top:3px}}
-#sb-close{{
+#sb-close,#sb-close2{{
   background:transparent;border:none;color:#666;font-size:15px;cursor:pointer;
   padding:2px 7px;border-radius:6px;transition:all .12s;line-height:1.2;
 }}
-#sb-close:hover{{color:#fff;background:#2a2a2a}}
+#sb-close:hover,#sb-close2:hover{{color:#fff;background:#2a2a2a}}
 #sb-controls{{padding:10px 14px;border-bottom:1px solid #2c2c2c}}
 #sb-sort{{
   width:100%;background:#2a2a2a;border:1px solid #3a3a3a;color:#ddd;
@@ -1261,6 +1261,19 @@ body{{
 .leaflet-popup-close-button{{color:#666!important;font-size:18px!important;padding:8px 10px!important;top:2px!important;right:2px!important}}
 .leaflet-popup-close-button:hover{{color:#fff!important;background:none!important}}
 .pu{{width:280px;padding:16px}}
+/* Scene detail renders in the right-hand sidebar instead of a map popup */
+#sb-detail{{display:none;flex-direction:column;flex:1;min-height:0}}
+#sidebar.detail #sb-head,#sidebar.detail #sb-controls,#sidebar.detail #sb-list,#sidebar.detail #sb-more{{display:none!important}}
+#sidebar.detail #sb-detail{{display:flex}}
+#sb-detail-bar{{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #2c2c2c}}
+#sb-back{{background:#2a2a2a;border:1px solid #3a3a3a;color:#ddd;border-radius:8px;padding:6px 11px;
+  font-size:12px;cursor:pointer;font-family:inherit;transition:all .12s}}
+#sb-back:hover{{background:#333;color:#fff;border-color:#555}}
+#sb-detail-body{{flex:1;overflow-y:auto;min-height:0}}
+#sb-detail .pu{{width:auto;padding:14px}}
+#sb-detail .pu-img{{max-height:280px}}
+#sb-hits-head{{padding:12px 14px 4px;font-size:13px;color:#fff;font-weight:500}}
+#sb-hits{{padding:6px 8px}}
 .pu-img{{width:100%;max-height:200px;object-fit:contain;object-position:center;
   border-radius:8px;margin-bottom:12px;display:block;cursor:pointer;background:#121212;
   border:1px solid #2c2c2c}}
@@ -1542,6 +1555,13 @@ body{{
   </div>
   <div id="sb-list"></div>
   <button id="sb-more">Load more</button>
+  <div id="sb-detail">
+    <div id="sb-detail-bar">
+      <button id="sb-back">&larr; Back to results</button>
+      <button id="sb-close2" title="Close panel">✕</button>
+    </div>
+    <div id="sb-detail-body"></div>
+  </div>
 </aside>
 
 </div><!-- /#stage -->
@@ -1977,13 +1997,10 @@ function polyArea(geom) {{
   return 0;
 }}
 
-const popup = L.popup({{maxWidth:290, autoPan:true, closeButton:true}});
-// Stop all clicks inside the popup from bubbling to the map
-popup.on('add', () => {{
-  const el = popup.getElement();
-  if (el) L.DomEvent.disableClickPropagation(el);
-}});
+// Scene details render into the right-hand sidebar rather than a Leaflet popup.
+const sbDetailBody = () => document.getElementById('sb-detail-body');
 let puFeats=[], puIdx=0, highlightLayer=null;
+let detailBackToHits = false;   // opened by a map click that hit several scenes
 
 function highlightFootprint(feat) {{
   if (highlightLayer) {{ map.removeLayer(highlightLayer); highlightLayer=null; }}
@@ -2050,7 +2067,7 @@ function renderPopup() {{
     ? `<button class="pu-mosaic-btn" data-sat="${{p.satellite}}" data-ds="${{p.dataset}}" data-mission="${{p.mission}}" data-cam="${{p.camera}}" data-date="${{mosaicDate}}">⊞ Mission ${{p.mission}} · ${{p.camera}}${{mosaicDate ? ' · '+mosaicDate : ''}}</button>`
     : '';
 
-  popup.setContent(`<div class="pu">
+  sbDetailBody().innerHTML = `<div class="pu">
     ${{imgHtml}}
     <h3>${{p.entityId}}</h3>
     <div class="pu-tags">
@@ -2065,25 +2082,26 @@ function renderPopup() {{
       ${{nav}}
     </div>
     ${{mosaicHtml}}
-  </div>`);
+  </div>`;
+  sbDetailBody().scrollTop = 0;
 
   setTimeout(() => {{
     const prev = document.getElementById('pu-prev');
     const next = document.getElementById('pu-next');
     if (prev) prev.addEventListener('click', e=>{{ e.stopPropagation(); e.preventDefault(); puIdx--; renderPopup(); }});
     if (next) next.addEventListener('click', e=>{{ e.stopPropagation(); e.preventDefault(); puIdx++; renderPopup(); }});
-    const dlBtn = popup.getElement()?.querySelector('.pu-dl-btn');
+    const dlBtn = sbDetailBody().querySelector('.pu-dl-btn');
     if (dlBtn) dlBtn.addEventListener('click', e => {{
       e.stopPropagation();
       openDownloadModal(dlBtn.dataset.eid, dlBtn.dataset.ds);
     }});
-    const cartBtn = popup.getElement()?.querySelector('.pu-cart-btn');
+    const cartBtn = sbDetailBody().querySelector('.pu-cart-btn');
     if (cartBtn) cartBtn.addEventListener('click', e => {{
       e.stopPropagation();
       cartToggle(puFeats[puIdx].properties);
       reflectCartBtn(cartBtn);
     }});
-    const mosaicBtn = popup.getElement()?.querySelector('.pu-mosaic-btn');
+    const mosaicBtn = sbDetailBody().querySelector('.pu-mosaic-btn');
     if (mosaicBtn) mosaicBtn.addEventListener('click', e => {{
       e.stopPropagation();
       const {{sat, ds, mission, cam}} = mosaicBtn.dataset;
@@ -2104,21 +2122,60 @@ function renderPopup() {{
       }});
       // Exact date filter
       dateFilter = mosaicBtn.dataset.date || null;
-      map.closePopup();
+      closeDetail();
       buildLayers();
     }});
   }}, 0);
 }}
 
+// Open the sidebar's detail view. `fromMap` means it came from a click on the
+// map, where several overlapping scenes become a list to choose from first.
+function openDetail(feats, idx, fromMap) {{
+  puFeats = feats; puIdx = idx;
+  detailBackToHits = !!fromMap && feats.length > 1;
+  document.getElementById('sidebar').classList.add('detail');
+  if (detailBackToHits) renderHitList(); else renderPopup();
+}}
+function closeDetail() {{
+  document.getElementById('sidebar').classList.remove('detail');
+  if (highlightLayer) {{ map.removeLayer(highlightLayer); highlightLayer = null; }}
+}}
+function renderHitList() {{
+  highlightFootprint(null);
+  sbDetailBody().innerHTML =
+    `<div id="sb-hits-head">${{puFeats.length}} scenes at this point</div><div id="sb-hits">` +
+    puFeats.map((f, i) => {{
+      const p = f.properties;
+      const d = (p.acquisitionDate || '').slice(0,10) || '—';
+      return `<div class="sb-item" data-i="${{i}}">
+        <div class="sb-thumb-ph">▦</div>
+        <div class="sb-meta">
+          <div class="sb-id">${{p.entityId}}</div>
+          <div class="sb-sub">${{d}} · ${{p.satellite || '—'}}</div>
+          <div class="sb-tags">${{p.scanned === false
+            ? '<span class="sb-tag un">Unscanned</span>' : '<span class="sb-tag">Downloadable</span>'}}</div>
+        </div></div>`;
+    }}).join('') + '</div>';
+}}
+sbDetailBody().addEventListener('click', e => {{
+  const row = e.target.closest('#sb-hits .sb-item');
+  if (!row) return;
+  puIdx = parseInt(row.dataset.i);
+  renderPopup();
+}});
+document.getElementById('sb-back').addEventListener('click', () => {{
+  if (detailBackToHits && document.querySelector('#sb-hits') === null) renderHitList();
+  else closeDetail();
+}});
+document.getElementById('sb-close2').addEventListener('click', () => setSidebar(false));
+
 map.on('click', e => {{
   const hits = visibleFeats.filter(f => ptInPoly(e.latlng, f.geometry));
   if (!hits.length) return;
   hits.sort((a,b) => polyArea(a.geometry)-polyArea(b.geometry));
-  puFeats=hits; puIdx=0;
-  popup.setLatLng(e.latlng).addTo(map);
-  renderPopup();
+  if (!sbOpen) setSidebar(true);
+  openDetail(hits, 0, true);
 }});
-map.on('popupclose', () => {{ if (highlightLayer) {{ map.removeLayer(highlightLayer); highlightLayer=null; }} }});
 
 // ── Sidebar: list of the scenes drawn on the map ──────────────────────────────
 const SB_PAGE = 60;
@@ -2191,7 +2248,7 @@ function updateSidebar(resetPage) {{
     const p = f.properties;
     const d = (p.acquisitionDate || '').slice(0,10) || '—';
     // No <img> here on purpose: USGS browse images are up to ~7.5MB each, so a
-    // list of them would be brutal. The preview loads on click, in the popup.
+    // list of them would be brutal. The preview loads on click, in the detail panel.
     const thumb = `<div class="sb-thumb-ph">▦</div>`;
     const tags = [];
     tags.push(p.scanned === false
@@ -2242,15 +2299,14 @@ document.getElementById('sb-list').addEventListener('click', e => {{
   if (!bb) return;
   const center = L.latLng((bb[1]+bb[3])/2, (bb[0]+bb[2])/2);
   if (!map.getBounds().contains(center)) map.panTo(center);
-  puFeats = [f]; puIdx = 0;
-  popup.setLatLng(center).addTo(map);
-  renderPopup();
+  openDetail([f], 0, false);
   document.querySelectorAll('.sb-item').forEach(x => x.classList.remove('active'));
   el.classList.add('active');
 }});
 
 function setSidebar(open) {{
   sbOpen = open;
+  if (!open) closeDetail();
   document.getElementById('sidebar').classList.toggle('open', open);
   document.getElementById('sb-toggle').classList.toggle('on', open);
   // Map width changed — let Leaflet re-measure, then refresh the list
@@ -2303,7 +2359,7 @@ function updateCartUI() {{
   const btn = document.getElementById('cart-btn');
   btn.textContent = '⬇ Queue' + (n ? ' (' + n + ')' : '');
   btn.classList.toggle('on', n > 0);
-  const pc = popup.getElement && popup.getElement() && popup.getElement().querySelector('.pu-cart-btn');
+  const pc = sbDetailBody().querySelector('.pu-cart-btn');
   if (pc) reflectCartBtn(pc);
   document.querySelectorAll('.sb-cart').forEach(b => {{
     const inCart = cartHas(b.dataset.eid);
