@@ -1487,6 +1487,10 @@ body{{
 #sb-detail .pu-img{{max-height:280px}}
 #sb-hits-head{{padding:12px 14px 4px;font-size:13px;color:#fff;font-weight:500}}
 #sb-hits{{padding:6px 8px}}
+.sb-badge{{width:44px;height:44px;flex-shrink:0;border-radius:6px;display:flex;align-items:center;
+  justify-content:center;font-size:17px;font-weight:700;color:#111}}
+.hit-num{{width:22px;height:22px;border-radius:50%;color:#111;font-weight:700;font-size:12px;display:flex;
+  align-items:center;justify-content:center;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.6)}}
 .pu-img{{width:100%;max-height:200px;object-fit:contain;object-position:center;
   border-radius:8px;margin-bottom:12px;display:block;cursor:pointer;background:#121212;
   border:1px solid #2c2c2c}}
@@ -2262,6 +2266,7 @@ function highlightFootprint(feat) {{
 }}
 
 function renderPopup() {{
+  clearHits();
   highlightFootprint(puFeats[puIdx]);
   const p   = puFeats[puIdx].properties;
   const c   = DS_COLORS[p.dataset]||'#fff';
@@ -2388,17 +2393,50 @@ function openDetail(feats, idx, fromMap) {{
 }}
 function closeDetail() {{
   document.getElementById('sidebar').classList.remove('detail');
+  clearHits();
   if (highlightLayer) {{ map.removeLayer(highlightLayer); highlightLayer = null; }}
+}}
+
+// When a click hits several overlapping scenes, each gets its own colour and a
+// number on the map, matched by a badge on its row, so the list says which
+// footprint is which before anything is opened.
+const HIT_COLORS = ['#ff5252', '#40c4ff', '#ffd740', '#69f0ae', '#e040fb', '#ff9100', '#18ffff', '#b2ff59'];
+let hitLayers = [], hitGroup = null;
+function clearHits() {{
+  if (hitGroup) {{ map.removeLayer(hitGroup); hitGroup = null; }}
+  hitLayers = [];
+}}
+function drawHits(feats) {{
+  clearHits();
+  hitGroup = L.featureGroup().addTo(map);
+  feats.forEach((f, i) => {{
+    const c = HIT_COLORS[i % HIT_COLORS.length];
+    const lyr = L.geoJSON(f, {{interactive: false, style: {{color: c, weight: 2.5, fillColor: c, fillOpacity: 0.1}}}});
+    hitLayers.push(lyr); hitGroup.addLayer(lyr);
+    const bb = featBBox(f);
+    if (bb) hitGroup.addLayer(L.marker([(bb[1] + bb[3]) / 2, (bb[0] + bb[2]) / 2], {{
+      interactive: false, keyboard: false,
+      icon: L.divIcon({{className: '', iconSize: [22, 22],
+                       html: '<div class="hit-num" style="background:' + c + '">' + (i + 1) + '</div>'}})
+    }}));
+  }});
+}}
+function hitHover(i, on) {{
+  const l = hitLayers[i];
+  if (!l) return;
+  l.setStyle(on ? {{weight: 5, fillOpacity: 0.35}} : {{weight: 2.5, fillOpacity: 0.1}});
+  if (on) l.bringToFront();
 }}
 function renderHitList() {{
   highlightFootprint(null);
+  drawHits(puFeats);
   sbDetailBody().innerHTML =
     `<div id="sb-hits-head">${{puFeats.length}} scenes at this point</div><div id="sb-hits">` +
     puFeats.map((f, i) => {{
       const p = f.properties;
       const d = (p.acquisitionDate || '').slice(0,10) || '—';
       return `<div class="sb-item" data-i="${{i}}">
-        <div class="sb-thumb-ph">▦</div>
+        <div class="sb-badge" style="background:${{HIT_COLORS[i % HIT_COLORS.length]}}">${{i + 1}}</div>
         <div class="sb-meta">
           <div class="sb-id">${{p.entityId}}</div>
           <div class="sb-sub">${{d}} · ${{p.satellite || '—'}}</div>
@@ -2406,7 +2444,19 @@ function renderHitList() {{
             ? '<span class="sb-tag un">Unscanned</span>' : '<span class="sb-tag">Downloadable</span>'}}</div>
         </div></div>`;
     }}).join('') + '</div>';
+  sbDetailBody().querySelectorAll('#sb-hits .sb-item').forEach(row => {{
+    row.addEventListener('mouseenter', () => hitHover(+row.dataset.i, true));
+    row.addEventListener('mouseleave', () => hitHover(+row.dataset.i, false));
+  }});
 }}
+// Hovering a row in the main results list outlines that scene on the map.
+document.getElementById('sb-list').addEventListener('mouseover', e => {{
+  const it = e.target.closest('.sb-item');
+  if (it && sbShown[+it.dataset.i]) highlightFootprint(sbShown[+it.dataset.i]);
+}});
+document.getElementById('sb-list').addEventListener('mouseleave', () => {{
+  if (!document.getElementById('sidebar').classList.contains('detail')) highlightFootprint(null);
+}});
 sbDetailBody().addEventListener('click', e => {{
   const row = e.target.closest('#sb-hits .sb-item');
   if (!row) return;
