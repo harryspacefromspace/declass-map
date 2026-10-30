@@ -31,10 +31,17 @@ body{
 #search{
   background:#2a2a2a;border:1px solid #3a3a3a;color:#ddd;
   padding:7px 12px 7px 32px;border-radius:8px;font-size:13px;
-  width:200px;outline:none;transition:border-color .15s,background .15s;
+  width:250px;outline:none;transition:border-color .15s,background .15s;
 }
 #search:focus{border-color:#90caf9;background:#2e2e2e}
 #search::placeholder{color:#555}
+#search-results{display:none;position:absolute;top:100%;right:0;width:340px;max-width:92vw;margin-top:6px;
+  background:#1f1f1f;border:1px solid #333;border-radius:8px;z-index:2000;max-height:270px;overflow-y:auto;
+  box-shadow:0 6px 18px rgba(0,0,0,.5)}
+.sr-item{padding:8px 11px;font-size:12px;color:#ccc;cursor:pointer;line-height:1.4;border-bottom:1px solid #2a2a2a}
+.sr-item:last-child{border-bottom:none}
+.sr-item:hover,.sr-item.on{background:#1a3a5c;color:#fff}
+.sr-note{padding:9px 11px;font-size:12px;color:#888}
 
 /* ── Toolbar ── */
 #filters{
@@ -652,7 +659,8 @@ body{
   <div id="stats"><span class="dot" style="background:#00ff88"></span>Declass I: <strong>40,432</strong> &nbsp;|&nbsp; <span class="dot" style="background:#00aaff"></span>Declass II: <strong>46,699</strong> &nbsp;|&nbsp; <span class="dot" style="background:#ff9900"></span>Declass III: <strong>21,629</strong> &nbsp;·&nbsp; Updated <strong>2026-10-29</strong></div>
   <div id="search-wrap">
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-    <input id="search" type="text" placeholder="Search entity ID or lat, lon…" autocomplete="off" />
+    <input id="search" type="text" placeholder="Search place, entity ID or lat, lon…" autocomplete="off" />
+    <div id="search-results"></div>
   </div>
 </div>
 
@@ -2780,12 +2788,92 @@ function tryCoordSearch(str) {
   return true;
 }
 
+// ── Place-name search ─────────────────────────────────────────────────────────
+// Runs on Enter rather than per keystroke: OpenStreetMap's Nominatim usage
+// policy rules out autocomplete. Entity IDs contain a digit and no spaces, which
+// is how a place name is told apart from one.
+const looksLikeId = q => /^[A-Za-z0-9_-]+$/.test(q) && /\d/.test(q);
+let placeAbort = null;
+function closePlaceResults() {
+  const box = document.getElementById('search-results');
+  box.style.display = 'none'; box.textContent = '';
+}
+function placeNote(text) {
+  const box = document.getElementById('search-results');
+  box.textContent = '';
+  const d = document.createElement('div');
+  d.className = 'sr-note'; d.textContent = text;
+  box.appendChild(d); box.style.display = 'block';
+}
+function gotoPlace(p) {
+  if (globeMode) document.getElementById('globe-btn').click();
+  const lat = parseFloat(p.lat), lon = parseFloat(p.lon);
+  if (!isFinite(lat) || !isFinite(lon)) return;
+  if (coordMarker) map.removeLayer(coordMarker);
+  const label = document.createElement('div');
+  label.textContent = (p.display_name || '').split(',').slice(0, 3).join(',');
+  coordMarker = L.marker([lat, lon]).addTo(map).bindPopup(label);
+  const bb = p.boundingbox;
+  if (bb && bb.length === 4) map.fitBounds([[+bb[0], +bb[2]], [+bb[1], +bb[3]]], {padding: [40, 40], maxZoom: 12});
+  else map.setView([lat, lon], 10);
+  coordMarker.openPopup();
+}
+async function placeSearch(q) {
+  if (placeAbort) placeAbort.abort();
+  placeAbort = new AbortController();
+  placeNote('Searching…');
+  try {
+    const r = await fetch('https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&accept-language=en&q=' +
+                          encodeURIComponent(q), {signal: placeAbort.signal});
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const hits = await r.json();
+    if (!hits.length) { placeNote('No places found for "' + q + '".'); return; }
+    gotoPlace(hits[0]);
+    if (hits.length === 1) { closePlaceResults(); return; }
+    // Several matches: go to the best one and list the rest to pick from.
+    const box = document.getElementById('search-results');
+    box.textContent = '';
+    hits.forEach((h, i) => {
+      const d = document.createElement('div');
+      d.className = 'sr-item' + (i === 0 ? ' on' : '');
+      d.textContent = h.display_name;
+      d.addEventListener('click', () => {
+        gotoPlace(h);
+        box.querySelectorAll('.sr-item').forEach(x => x.classList.toggle('on', x === d));
+      });
+      box.appendChild(d);
+    });
+    box.style.display = 'block';
+  } catch (e) {
+    if (e.name !== 'AbortError') placeNote('Place search is unavailable right now.');
+  }
+}
+document.getElementById('search').addEventListener('keydown', e => {
+  if (e.key === 'Escape') { closePlaceResults(); return; }
+  if (e.key !== 'Enter') return;
+  const q = e.target.value.trim();
+  if (!q || tryCoordSearch(q)) return;
+  // An ID that matches a scene is handled by the filter; anything else is a place.
+  if (looksLikeId(q)) {
+    const ql = q.toLowerCase();
+    if (GEOJSON.features.some(f => (f.properties.entityId || '').toLowerCase().includes(ql) ||
+                                   (f.properties.displayId || '').toLowerCase().includes(ql))) return;
+  }
+  placeSearch(q);
+});
+document.addEventListener('click', e => {
+  if (!e.target.closest('#search-wrap')) closePlaceResults();
+});
+
 document.getElementById('search').addEventListener('input', e => {
   clearTimeout(st);
   st = setTimeout(() => {
     searchQ = e.target.value.trim();
     // Coordinate jump takes priority over entity-ID filtering
     if (tryCoordSearch(searchQ)) { searchQ = ''; return; }
+    // Only ID-like text filters the scenes; a place name would empty the map.
+    if (!looksLikeId(searchQ)) searchQ = '';
+    closePlaceResults();
     if (coordMarker) { map.removeLayer(coordMarker); coordMarker = null; }
     buildLayers();
     if (searchQ.length >= 4) {
