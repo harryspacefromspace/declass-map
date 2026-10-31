@@ -1585,9 +1585,28 @@ body{{
     border-left:none;border-top:1px solid #3a3a3a;border-radius:16px 16px 0 0;
     box-shadow:0 -10px 30px rgba(0,0,0,.6);z-index:1200;transition:height .2s}}
   #sidebar.tall{{height:88%}}
-  #sb-grip{{display:block;flex:none;height:24px;cursor:pointer;position:relative}}
-  #sb-grip::before{{content:'';position:absolute;left:50%;top:10px;width:44px;height:4px;
-    margin-left:-22px;border-radius:2px;background:#555}}
+  #sb-grip{{display:block;flex:none;height:32px;cursor:grab;position:relative;touch-action:none}}
+  #sb-grip::before{{content:'';position:absolute;left:50%;top:13px;width:44px;height:5px;
+    margin-left:-22px;border-radius:3px;background:#555}}
+  #sidebar.dragging{{transition:none}}
+  #sidebar.open{{animation:sheetUp .22s ease-out}}
+  @keyframes sheetUp{{from{{transform:translateY(28px)}}}}
+  #sidebar{{overflow:hidden}}
+  #sb-head{{padding-top:2px}}
+
+  /* A little more finish on the bottom bar and the result rows */
+  #m-bar{{background:rgba(24,24,24,.96);backdrop-filter:blur(8px);gap:8px}}
+  #m-bar button{{border-radius:10px;font-weight:500;padding:0 14px}}
+  #m-bar #view-group > div{{gap:6px}}
+  #header{{background:rgba(30,30,30,.97)}}
+  #header h1{{font-weight:600;letter-spacing:.01em}}
+  #m-filters{{font-weight:500}}
+  .sb-item{{border-radius:10px;margin-bottom:2px}}
+  .sb-item:active{{background:#1a3a5c}}
+  .sb-id{{font-size:12px}}
+  .sb-sub{{font-size:12px}}
+  #sb-detail-bar{{padding:6px 12px 10px}}
+  #counter{{box-shadow:0 2px 10px rgba(0,0,0,.5);backdrop-filter:blur(6px)}}
 
   /* Easier to hit */
   button,select{{min-height:40px}}
@@ -4265,8 +4284,34 @@ function panForSheet(pt) {{
     document.body.classList.toggle('m-filters-open');
   }});
   map.on('click', () => document.body.classList.remove('m-filters-open'));
-  document.getElementById('sb-grip').addEventListener('click', () =>
-    document.getElementById('sidebar').classList.toggle('tall'));
+  // Drag the handle to resize the sheet: up to expand, down to shrink or dismiss.
+  // A plain tap on it toggles between the two sizes.
+  const sheet = document.getElementById('sidebar'), grip = document.getElementById('sb-grip');
+  let drag = null;
+  grip.addEventListener('pointerdown', e => {{
+    drag = {{y: e.clientY, h: sheet.getBoundingClientRect().height, moved: false,
+            stage: document.getElementById('stage').getBoundingClientRect().height}};
+    sheet.classList.add('dragging');
+    grip.setPointerCapture(e.pointerId);
+  }});
+  grip.addEventListener('pointermove', e => {{
+    if (!drag) return;
+    const dy = drag.y - e.clientY;
+    if (Math.abs(dy) > 6) drag.moved = true;
+    if (drag.moved) sheet.style.height = Math.max(60, Math.min(drag.stage * 0.92, drag.h + dy)) + 'px';
+  }});
+  const endDrag = e => {{
+    if (!drag) return;
+    const d = drag; drag = null;
+    sheet.classList.remove('dragging');
+    const frac = sheet.getBoundingClientRect().height / d.stage;
+    sheet.style.height = '';
+    if (!d.moved) {{ sheet.classList.toggle('tall'); return; }}
+    if (frac < 0.22) {{ sheet.classList.remove('tall'); setSidebar(false); }}
+    else sheet.classList.toggle('tall', frac > 0.66);
+  }};
+  grip.addEventListener('pointerup', endDrag);
+  grip.addEventListener('pointercancel', endDrag);
 }})();
 
 // ── Shareable view in the URL ─────────────────────────────────────────────────
