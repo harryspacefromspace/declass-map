@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Declassified Satellite — Available Downloads</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -646,9 +646,58 @@ body{
   #search-wrap{margin-left:0;width:100%}
   #search{width:100%}
 }
-/* Sidebar takes over the stage on small screens instead of squeezing the map */
+/* Phone-only pieces; hidden on larger screens */
+#m-bar,#m-filters,#sb-grip{display:none}
+
+/* Phones: a slim top bar, the map as the main thing, results in a bottom sheet */
 @media (max-width:700px){
-  #sidebar{position:absolute;inset:0;width:auto;border-left:none;z-index:1200}
+  body{height:100dvh}
+  #header{padding:8px 12px;gap:8px;flex-wrap:wrap;align-items:center}
+  #header h1{font-size:14px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+  #header h1 span,#stats{display:none}
+  #m-filters{display:inline-flex;align-items:center;gap:6px;background:#2a2a2a;border:1px solid #3a3a3a;
+    color:#ddd;border-radius:8px;padding:0 14px;font-size:13px;cursor:pointer;font-family:inherit}
+  body.m-filters-open #m-filters{background:#1a3a5c;border-color:#42a5f5;color:#fff}
+  #search-wrap{order:3;flex-basis:100%;width:100%}
+  #search{font-size:16px;padding:10px 12px 10px 34px}
+  #search-results{left:0;right:0;width:auto}
+
+  /* The filter toolbar opens as a panel over the map instead of eating the top of it */
+  #filters{display:none;position:fixed;left:0;right:0;top:var(--m-head,92px);z-index:1500;
+    padding:10px 12px;box-shadow:0 12px 30px rgba(0,0,0,.7);max-height:calc(100dvh - var(--m-head,92px) - 60px)}
+  body.m-filters-open #filters{display:flex}
+  .dd-panel{max-width:calc(100vw - 16px);left:8px!important}
+
+  /* Queue / List / Globe / basemap move to a thumb-reach bar at the bottom */
+  #m-bar{display:flex;flex:none;gap:6px;overflow-x:auto;-webkit-overflow-scrolling:touch;
+    background:#1e1e1e;border-top:1px solid #2c2c2c;z-index:1000;
+    padding:6px 8px calc(6px + env(safe-area-inset-bottom))}
+  #m-bar #view-group{margin-left:0;flex-wrap:nowrap;gap:6px}
+  #m-bar #view-group > *{flex:none}
+
+  /* Results become a bottom sheet over the map; tap the handle to make it taller */
+  #sidebar{position:absolute;left:0;right:0;bottom:0;top:auto;width:auto;height:46%;
+    border-left:none;border-top:1px solid #3a3a3a;border-radius:16px 16px 0 0;
+    box-shadow:0 -10px 30px rgba(0,0,0,.6);z-index:1200;transition:height .2s}
+  #sidebar.tall{height:88%}
+  #sb-grip{display:block;flex:none;height:24px;cursor:pointer;position:relative}
+  #sb-grip::before{content:'';position:absolute;left:50%;top:10px;width:44px;height:4px;
+    margin-left:-22px;border-radius:2px;background:#555}
+
+  /* Easier to hit */
+  button,select{min-height:40px}
+  input,select{font-size:16px}
+  .sb-item{padding:12px 8px}
+  .leaflet-control-zoom{display:none}
+  #usgs-status{display:none}
+  #counter{max-width:calc(100% - 24px)}
+
+  /* Modals use the whole screen */
+  #cart-box{width:100%;max-width:100%;height:100%;max-height:100%;border-radius:0;padding:16px 14px}
+  #cart-modal{align-items:stretch}
+  #dl-box{width:94vw;max-width:94vw}
+  .bd-creds,.cart-range .cr-row{flex-direction:column}
+  .cart-actions{flex-wrap:wrap}
 }
 </style>
 </head>
@@ -656,6 +705,7 @@ body{
 
 <div id="header">
   <h1>🛰 Declassified Satellite <span>Available Downloads</span></h1>
+  <button id="m-filters" type="button">☰ Filters</button>
   <div id="stats"><span class="dot" style="background:#00ff88"></span>Declass I: <strong>40,436</strong> &nbsp;|&nbsp; <span class="dot" style="background:#00aaff"></span>Declass II: <strong>46,699</strong> &nbsp;|&nbsp; <span class="dot" style="background:#ff9900"></span>Declass III: <strong>21,633</strong> &nbsp;·&nbsp; Updated <strong>2026-10-30</strong></div>
   <div id="search-wrap">
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
@@ -852,6 +902,7 @@ body{
 
 <!-- Right sidebar — scenes currently drawn on the map -->
 <aside id="sidebar">
+  <div id="sb-grip" title="Drag handle: tap to expand or shrink"></div>
   <div id="sb-head">
     <div>
       <div id="sb-title">Scenes on map</div>
@@ -1546,6 +1597,7 @@ map.on('click', e => {
   hits.sort((a,b) => polyArea(a.geometry)-polyArea(b.geometry));
   if (!sbOpen) setSidebar(true);
   openDetail(hits, 0, true);
+  panForSheet(e.containerPoint);
 });
 
 // ── Sidebar: list of the scenes drawn on the map ──────────────────────────────
@@ -3288,6 +3340,39 @@ async function checkUsgsStatus() {
 }
 checkUsgsStatus();
 setInterval(checkUsgsStatus, 60_000);
+
+// ── Phone layout ──────────────────────────────────────────────────────────────
+// CSS does most of it; this moves the view controls to a bottom bar, drives the
+// Filters panel and the results sheet, and keeps a tapped footprint in sight.
+const phoneMQ = window.matchMedia('(max-width:700px)');
+function panForSheet(pt) {
+  if (!phoneMQ.matches) return;
+  const h = map.getSize().y;
+  // The sheet covers the bottom ~46%; bring a point under it up into the top part.
+  if (pt.y > h * 0.5) map.panBy([0, pt.y - h * 0.25], {animate: true});
+}
+(function () {
+  const vg = document.getElementById('view-group'), filters = document.getElementById('filters');
+  const header = document.getElementById('header'), bar = document.createElement('div');
+  bar.id = 'm-bar';
+  document.body.appendChild(bar);
+  const layout = () => {
+    (phoneMQ.matches ? bar : filters).appendChild(vg);
+    document.documentElement.style.setProperty('--m-head', header.offsetHeight + 'px');
+    setTimeout(() => map.invalidateSize(), 50);
+  };
+  phoneMQ.addEventListener('change', layout);
+  window.addEventListener('resize', () =>
+    document.documentElement.style.setProperty('--m-head', header.offsetHeight + 'px'));
+  layout();
+  document.getElementById('m-filters').addEventListener('click', () => {
+    document.documentElement.style.setProperty('--m-head', header.offsetHeight + 'px');
+    document.body.classList.toggle('m-filters-open');
+  });
+  map.on('click', () => document.body.classList.remove('m-filters-open'));
+  document.getElementById('sb-grip').addEventListener('click', () =>
+    document.getElementById('sidebar').classList.toggle('tall'));
+})();
 
 // ── Shareable view in the URL ─────────────────────────────────────────────────
 // Keeps position in the address bar so a view can be linked. replaceState, not
