@@ -4852,6 +4852,20 @@ def load_previous_features(path="available_scenes.geojson"):
         return {}
 
 
+# The unscanned CORONA KH-1..KH-4 frames come to roughly 105,000. The Leaflet page
+# downloads its whole scene file before it can draw anything and gives out
+# somewhere between 108k and 214k features, so those frames go only to the
+# consumers that can cope: the tile map, the frame browser and the facets.
+LEAFLET_SKIP_UNSCANNED = {"KH-1", "KH-2", "KH-3", "KH-4"}
+
+
+def leaflet_features(features):
+    """The subset of features the Leaflet page loads (see above)."""
+    return [f for f in features
+            if not (f["properties"].get("scanned") is False
+                    and f["properties"].get("satellite") in LEAFLET_SKIP_UNSCANNED)]
+
+
 def main():
     username = os.environ.get("M2M_USERNAME")
     token    = os.environ.get("M2M_TOKEN")
@@ -5017,6 +5031,26 @@ def main():
                     all_features.extend(keep)
                     print(f"  Reused {len(keep):,} unscanned KH-6 features from previous run")
 
+        # Unscanned frames from a satellite pull (PULL_SATELLITES) are not
+        # re-fetched on an ordinary run - that takes hours. Carry them over from
+        # the previous run for every dataset/satellite not pulled this time, or
+        # the next daily build would quietly drop them (and the shrink guard
+        # below would then refuse to publish anything at all).
+        pulled = {(f["properties"]["dataset"], f["properties"].get("satellite"))
+                  for f in all_features if f["properties"].get("scanned") is False}
+        have = {f["properties"]["entityId"] for f in all_features}
+        carried = {}
+        for ds, feats in prev_by_dataset.items():
+            for f in feats:
+                p = f["properties"]
+                if (p.get("scanned") is False and p["entityId"] not in have
+                        and (ds, p.get("satellite")) not in pulled):
+                    all_features.append(f)
+                    carried[p.get("satellite")] = carried.get(p.get("satellite"), 0) + 1
+        if carried:
+            print("\n  Carried over unscanned frames from the previous run: "
+                  + ", ".join(f"{s}: {n:,}" for s, n in sorted(carried.items(), key=str)))
+
     finally:
         logout(api_key)
 
@@ -5064,7 +5098,9 @@ def main():
     counts    = {}
     years     = []
     sat_seen  = []
-    for f in all_features:
+    # Counts, years and satellites describe what the Leaflet page will load.
+    leaflet = leaflet_features(all_features)
+    for f in leaflet:
         p  = f["properties"]
         ds = p["dataset"]
         counts[ds] = counts.get(ds, 0) + 1
@@ -5079,10 +5115,10 @@ def main():
 
     geojson = {
         "type":     "FeatureCollection",
-        "features": all_features,
+        "features": leaflet,
         "metadata": {
             "generated": datetime.utcnow().isoformat() + "Z",
-            "total":     len(all_features),
+            "total":     len(leaflet),
             "counts":    counts,
             "year_min":  min(years) if years else 1960,
             "year_max":  max(years) if years else 1984,
@@ -5102,9 +5138,19 @@ def main():
     # fetches at runtime (DATA_URL), so keep it in sync with the built HTML.
     # all_features already merges per-dataset fallbacks, so it stays complete
     # even on a partial run. Minified to keep the served file small.
-    with open("available_scenes.geojson", "w") as f:
+    # The Leaflet page's file is a subset when KH-1..KH-4 unscanned frames are
+    # present; the full set stays in available_scenes.geojson for tiles, frames,
+    # facets and as the next run's fallback.
+    with open("scenes-leaflet.geojson", "w") as f:
         json.dump(geojson, f, separators=(",", ":"))
-    size = os.path.getsize("available_scenes.geojson")
+    full = dict(geojson, features=all_features,
+                metadata=dict(geojson["metadata"], total=len(all_features)))
+    if len(all_features) != len(leaflet):
+        print(f"  {len(all_features) - len(leaflet):,} unscanned CORONA frames kept out of the "
+              f"Leaflet file ({len(leaflet):,} of {len(all_features):,})")
+    with open("available_scenes.geojson", "w") as f:
+        json.dump(full, f, separators=(",", ":"))
+    size = os.path.getsize("scenes-leaflet.geojson")
     if failed:
         print(f"Saved available_scenes.geojson (partial run — {', '.join(failed)} used fallback data)")
     else:

@@ -77,9 +77,14 @@ jobs:
       - name: Step 2 — Fetch previous scene data from R2 (fallback source)
         continue-on-error: true
         run: |
-          aws s3 cp "s3://${R2_BUCKET}/scenes.geojson" available_scenes.geojson \
+          # scenes-full.geojson is the complete set, including the unscanned CORONA
+          # frames the Leaflet page can't load; scenes.geojson is only that page's
+          # subset, so it is the fallback for the first run after this change.
+          aws s3 cp "s3://${R2_BUCKET}/scenes-full.geojson" available_scenes.geojson \
             --endpoint-url "https://${CF_ACCOUNT_ID}.r2.cloudflarestorage.com" \
-            || echo "no previous scene data in R2 yet — first run"
+          || aws s3 cp "s3://${R2_BUCKET}/scenes.geojson" available_scenes.geojson \
+            --endpoint-url "https://${CF_ACCOUNT_ID}.r2.cloudflarestorage.com" \
+          || echo "no previous scene data in R2 yet — first run"
           ls -la available_scenes.geojson 2>/dev/null || true
         env:
           R2_BUCKET: declass-map-data
@@ -109,11 +114,18 @@ jobs:
       - name: Step 4 — Upload scene data to R2
         run: |
           test -s available_scenes.geojson || { echo "no scene data to upload"; exit 1; }
-          aws s3 cp available_scenes.geojson \
+          test -s scenes-leaflet.geojson || { echo "no Leaflet scene file to upload"; exit 1; }
+          # What the Leaflet page downloads
+          aws s3 cp scenes-leaflet.geojson \
             "s3://${R2_BUCKET}/scenes.geojson" \
             --endpoint-url "https://${CF_ACCOUNT_ID}.r2.cloudflarestorage.com" \
             --content-type "application/json"
-          echo "uploaded $(du -h available_scenes.geojson | cut -f1)"
+          # The complete set: the next run's fallback (private, never served)
+          aws s3 cp available_scenes.geojson \
+            "s3://${R2_BUCKET}/scenes-full.geojson" \
+            --endpoint-url "https://${CF_ACCOUNT_ID}.r2.cloudflarestorage.com" \
+            --content-type "application/json"
+          echo "uploaded $(du -h scenes-leaflet.geojson | cut -f1) for the map, $(du -h available_scenes.geojson | cut -f1) in full"
         env:
           R2_BUCKET: declass-map-data
           CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
