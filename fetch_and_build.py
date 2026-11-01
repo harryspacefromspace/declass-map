@@ -1739,9 +1739,9 @@ body{{
   </div>
 
   <!-- Unscanned toggle -->
-  <button id="unscanned-toggle">
+  <button id="unscanned-toggle" class="on" title="Frames whose film hasn't been scanned yet: they have a footprint but no downloadable image">
     <span class="unscanned-dot"></span>
-    All scenes
+    Hide unscanned
   </button>
 
   <!-- Published toggle -->
@@ -2037,7 +2037,7 @@ document.querySelectorAll('.cam-btn').forEach(b => {{
   cameraActive[b.dataset.ds + '|' + b.dataset.cam] = true;
 }});
 
-let showUnscanned = false;
+let showUnscanned = true;   // unscanned film is shown by default; the toggle hides it
 let hidePublished = false;
 let recentDays = 0;   // 0 = off; else filter to scenes that became downloadable within N days
 // Frame-order window, as a percentage of each mission's flight sequence
@@ -2058,7 +2058,7 @@ function styleHover(ds) {{
   return {{color:c, weight:2, fillColor:c, fillOpacity:0.42}};
 }}
 function styleUnscanned() {{
-  return {{color:'#ffa726', weight:1, fillColor:'#ffa726', fillOpacity:0.04,
+  return {{color:'#ffa726', weight:1.2, fillColor:'#ffa726', fillOpacity:0.07,
            dashArray:'4 4'}};
 }}
 function styleUnscannedHover() {{
@@ -2072,16 +2072,13 @@ function buildLayers() {{
 
   let feats = GEOJSON.features.filter(f => {{
     const p = f.properties;
-    // Unscanned: only show if toggle is on, and satellite filter matches
+    // Unscanned frames follow the same filters as everything else (satellite,
+    // dates, mission, camera, search). Only two filters can't apply to them:
+    // film that isn't scanned is never "recently available" or "published".
     if (p.scanned === false) {{
       if (!showUnscanned) return false;
-      if (recentDays > 0) return false;  // unscanned film is not "available to download"
-      if (!satActive[p.satellite]) return false;
-      return true;  // unscanned skip other filters
-    }}
-
-    // Hide published scenes if toggle is on
-    if (hidePublished && p.published) return false;
+      if (recentDays > 0) return false;
+    }} else if (hidePublished && p.published) return false;
     if (!satActive[p.satellite]) return false;
 
     // Recently-available filter (based on when the scene became downloadable).
@@ -4125,7 +4122,7 @@ document.getElementById('unscanned-toggle').addEventListener('click', () => {{
   showUnscanned = !showUnscanned;
   const btn = document.getElementById('unscanned-toggle');
   btn.classList.toggle('on', showUnscanned);
-  btn.childNodes[2].textContent = showUnscanned ? 'Scanned only' : 'All scenes';
+  btn.childNodes[2].textContent = showUnscanned ? 'Hide unscanned' : 'Show unscanned';
   buildLayers();
 }});
 
