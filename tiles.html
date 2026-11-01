@@ -723,6 +723,18 @@ function setLoMode(on){
     map.setLayoutProperty(l, 'visibility', on ? 'none' : 'visible');
 }
 const LO_LIMIT = 1000;
+// The low-zoom footprint archive holds the scanned scenes plus the smaller
+// unscanned sets. The ~690k unscanned KH-1..4 and HEXAGON frames are only in the
+// zoom 5+ tiles and the count bubbles - putting them in the zoomed-out archive
+// made its top tiles tens of MB. So it can only answer for a filter that
+// leaves those out.
+const LO_MISSING_UNSCANNED = new Set(['KH-1', 'KH-2', 'KH-3', 'KH-4', 'KH-9 (HEXAGON)']);
+function loCovers(){
+  if (!el('f-unscanned').checked) return true;
+  if (!facets) return false;
+  for (const s of selSat) if (LO_MISSING_UNSCANNED.has(s)) return false;
+  return true;
+}
 function renderedRaw(){
   const z = map.getZoom();
   if (z >= 5) return map.queryRenderedFeatures({layers:['fill']});
@@ -760,8 +772,10 @@ function report(){
       cellCount = cells.length;
     }
     // Footprints become measurable once the low-zoom tiles for this view are in.
-    if (!loMode && (inexact || cellTotal < LO_LIMIT)) ensureLoLayers();
-    const loReady = loFresh && !!map.getLayer('fill-lo');
+    const covers = loCovers();
+    if (loMode && !covers){ setLoMode(false); map.once('idle', report); return; }
+    if (!loMode && covers && (inexact || cellTotal < LO_LIMIT)) ensureLoLayers();
+    const loReady = covers && loFresh && !!map.getLayer('fill-lo');
     const n = loReady ? rendered().length : null;
 
     if (loMode){
@@ -769,7 +783,7 @@ function report(){
       if (n >= LO_LIMIT){ setLoMode(false); map.once('idle', report); return; }
     } else if (n !== null && n < LO_LIMIT){
       setLoMode(true); map.once('idle', report); return;
-    } else if (n === null && !inexact && cellCount && cellTotal < LO_LIMIT){
+    } else if (covers && n === null && !inexact && cellCount && cellTotal < LO_LIMIT){
       setLoMode(true); map.once('idle', report); return;
     }
 
@@ -780,7 +794,7 @@ function report(){
     } else {
       el('counter').innerHTML = '<b>' + cellTotal.toLocaleString() + '</b> scenes in <b>'
         + cellCount + '</b> groups · zoom in for footprints'
-        + (inexact ? ' <span style="color:#8b98a9">(counting…)</span>' : '');
+        + (inexact ? ' <span style="color:#8b98a9">' + (covers ? '(counting…)' : '(grouped counts ignore date, mission, camera and order filters)') + '</span>' : '');
     }
   } else {
     const n = rendered().length;
