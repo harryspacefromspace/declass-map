@@ -57,7 +57,11 @@ SATELLITE_MISSIONS = {
     "KH-4A":          ("corona2", [str(n) for n in range(1001, 1053)]),
     "KH-4B":          ("corona2", [str(n) for n in range(1101, 1118)]),
     "KH-6 (LANYARD)": ("corona2", LANYARD_MISSIONS),
+    # Asking USGS for the whole of Declass III in one search times out (a single
+    # request exceeds the per-request cap), so HEXAGON is pulled mission by mission.
+    "KH-9 (HEXAGON)": ("declassiii", [str(n) for n in range(1201, 1221)]),
 }
+PER_MISSION_DATASETS = {"declassiii"}
 
 # Satellite display order
 SAT_ORDER = [
@@ -4859,11 +4863,22 @@ def load_previous_features(path="available_scenes.geojson"):
 LEAFLET_SKIP_UNSCANNED = {"KH-1", "KH-2", "KH-3", "KH-4"}
 
 
+# HEXAGON's unscanned frames are in the Leaflet file only while they stay a
+# modest number; past this they are tile-map only, like KH-1..KH-4.
+LEAFLET_HEXAGON_UNSCANNED_MAX = 10_000
+
+
 def leaflet_features(features):
     """The subset of features the Leaflet page loads (see above)."""
+    skip = set(LEAFLET_SKIP_UNSCANNED)
+    hex_unscanned = sum(1 for f in features
+                        if f["properties"].get("scanned") is False
+                        and f["properties"].get("satellite") == "KH-9 (HEXAGON)")
+    if hex_unscanned > LEAFLET_HEXAGON_UNSCANNED_MAX:
+        skip.add("KH-9 (HEXAGON)")
     return [f for f in features
             if not (f["properties"].get("scanned") is False
-                    and f["properties"].get("satellite") in LEAFLET_SKIP_UNSCANNED)]
+                    and f["properties"].get("satellite") in skip)]
 
 
 def main():
@@ -4965,21 +4980,36 @@ def main():
             pull_sats = [s for s in pull_sats if s in SATELLITE_MISSIONS]
         if pull_sats:
             print(f"\n  Per-satellite pull: {', '.join(pull_sats)}")
-            sat_fid = None
-            try:
-                sat_fid = get_metadata_filter_id(api_key, "corona2", ["mission"], deadline)
-            except Exception as e:
-                print(f"  WARNING: could not look up the Mission filter — {e}")
-            if not sat_fid:
+            # The Mission filter has a different id in each dataset.
+            fids = {}
+            for ds_name in sorted({SATELLITE_MISSIONS[s][0] for s in pull_sats}):
+                try:
+                    fids[ds_name] = get_metadata_filter_id(api_key, ds_name, ["mission"], deadline)
+                except Exception as e:
+                    print(f"  WARNING: could not look up the {ds_name} Mission filter — {e}")
+                    fids[ds_name] = None
+            if not any(fids.values()):
                 print("  Skipping per-satellite pull (no Mission filter)")
-            for sat in (pull_sats if sat_fid else []):
+            for sat in [s for s in pull_sats if fids.get(SATELLITE_MISSIONS[s][0])]:
                 ds, missions = SATELLITE_MISSIONS[sat]
+                sat_fid = fids[ds]
                 print(f"\n  {sat} — {len(missions)} mission(s) in {ds}...")
                 try:
                     scanned_ids = {f["properties"]["entityId"]
                                    for f in all_features
                                    if f["properties"]["dataset"] == ds}
-                    scenes = search_by_missions(api_key, ds, sat_fid, missions, deadline)
+                    if ds in PER_MISSION_DATASETS:
+                        scenes = []
+                        for m in missions:
+                            try:
+                                got = search_by_missions(api_key, ds, sat_fid, [m], deadline)
+                                print(f"    mission {m}: {len(got):,} scenes")
+                                scenes.extend(got)
+                            except Exception as e:
+                                print(f"    WARNING: mission {m} failed — {e}")
+                                failed.append(f"{sat} mission {m}")
+                    else:
+                        scenes = search_by_missions(api_key, ds, sat_fid, missions, deadline)
                     if not scenes:
                         # Silent zero is the dangerous failure here: it looks the
                         # same as "this satellite has no frames".
