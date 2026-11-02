@@ -1493,6 +1493,7 @@ body{{
 #sb-hits{{padding:6px 8px}}
 #hits-ctl{{padding:4px 12px 10px;display:flex;flex-direction:column;gap:7px;border-bottom:1px solid #2c2c2c}}
 #hits-ctl .hc-row{{display:flex;gap:6px}}
+#hits-q{{flex:1.15!important}}
 #hits-ctl input[type=text],#hits-ctl select{{flex:1;min-width:0;background:#2a2a2a;border:1px solid #3a3a3a;color:#ddd;
   padding:7px 9px;border-radius:8px;font-size:12px;outline:none;color-scheme:dark;font-family:inherit}}
 #hits-ctl input[type=text]:focus,#hits-ctl select:focus{{border-color:#90caf9}}
@@ -1507,7 +1508,24 @@ body{{
 .hit-thumb{{width:104px;height:46px;flex-shrink:0;border-radius:6px;overflow:hidden;background:#121212;
   border:1px solid #2c2c2c;display:flex;align-items:center;justify-content:center;color:#4a4a4a;font-size:10px;text-align:center;line-height:1.2}}
 .hit-thumb img{{width:100%;height:100%;object-fit:cover;object-position:center;display:block}}
+.hit-thumb img.tall{{object-fit:contain}}
 .sb-xtra{{font-size:10.5px;color:#777;margin-top:2px}}
+.hc-view{{display:flex;border:1px solid #3a3a3a;border-radius:8px;overflow:hidden}}
+.hc-view button{{flex:1;background:#2a2a2a;border:0;border-right:1px solid #3a3a3a;color:#999;padding:6px 4px;
+  font-size:12px;cursor:pointer;font-family:inherit}}
+.hc-view button:last-child{{border-right:0}}
+.hc-view button.on{{background:#1a3a5c;color:#fff}}
+.sb-item.unsc .hit-thumb{{border-color:#ffa72655}}
+#sb-hits .sb-item{{position:relative}}
+#sb-hits.v-lg .sb-item,#sb-hits.v-grid .sb-item{{flex-direction:column}}
+#sb-hits.v-lg .hit-thumb{{width:100%;height:140px}}
+#sb-hits.v-lg .sb-cart,#sb-hits.v-grid .sb-cart{{position:absolute;top:14px;right:14px;background:rgba(20,20,20,.85)}}
+#sb-hits.v-grid{{display:grid;grid-template-columns:repeat(2,1fr);gap:6px}}
+#sb-hits.v-grid .sb-item{{padding:6px;gap:5px}}
+#sb-hits.v-grid .hit-thumb{{width:100%;height:78px}}
+#sb-hits.v-grid .sb-xtra,#sb-hits.v-grid .sb-tags{{display:none}}
+#sb-hits.v-grid .sb-id{{font-size:10px}}
+#sb-hits.v-grid .sb-sub{{font-size:10.5px}}
 .hit-empty{{padding:22px 10px;text-align:center;color:#555;font-size:12px}}
 .pu-img{{width:100%;max-height:200px;object-fit:contain;object-position:center;
   border-radius:8px;margin-bottom:12px;display:block;cursor:pointer;background:#121212;
@@ -2472,7 +2490,7 @@ function renderPopup() {{
 function openDetail(feats, idx, fromMap) {{
   puFeats = feats; puIdx = idx;
   detailBackToHits = !!fromMap && feats.length > 1;
-  if (fromMap) hitView = {{sort: 'area', dl: false, sat: '', q: ''}};
+  if (fromMap) hitView = {{sort: 'area', dl: false, sat: '', q: '', size: hitView.size}};   // the view style is a preference, so it stays
   document.getElementById('sidebar').classList.add('detail');
   if (detailBackToHits) renderHitList(); else renderPopup();
 }}
@@ -2482,7 +2500,8 @@ function closeDetail() {{
 }}
 // View settings for the list of scenes under a click: filter and sort live here
 // so they survive opening a scene and coming back.
-let hitView = {{sort: 'area', dl: false, sat: '', q: ''}};
+const hitSizeSaved = () => {{ try {{ return localStorage.getItem('declass_hit_size') || 'sm'; }} catch (e) {{ return 'sm'; }} }};
+let hitView = {{sort: 'area', dl: false, sat: '', q: '', size: hitSizeSaved()}};
 let hitObserver = null;
 const HIT_SORTS = {{
   area: null,   // as clicked: smallest footprint first
@@ -2517,6 +2536,7 @@ function observeHitThumbs() {{
 }}
 function renderHitRows() {{
   const rows = hitRows();
+  document.getElementById('sb-hits').className = 'v-' + hitView.size;
   document.getElementById('hits-count').textContent =
     rows.length === puFeats.length ? '' : rows.length + ' of ' + puFeats.length + ' shown';
   const dl = rows.filter(r => r.f.properties.scanned !== false).length;
@@ -2527,16 +2547,18 @@ function renderHitRows() {{
     const p = f.properties;
     const d = (p.acquisitionDate || '').slice(0, 10) || '—';
     const scanned = p.scanned !== false;
-    const thumb = (scanned && p.browse)
+    // Unscanned frames still have a low-res browse image on USGS, so they get a preview too.
+    const thumb = p.browse
       ? '<img alt="" data-src="/img/' + p.browse.replace(/^https?:\\/\\/[^/]+\\//, '') +
-        '" onerror="this.parentNode.textContent=\\'No preview\\'">'
-      : (scanned ? 'No preview' : 'Not scanned');
+        '" onload="if(this.naturalHeight>this.naturalWidth*1.2)this.classList.add(\\'tall\\')"' +
+        ' onerror="this.parentNode.textContent=\\'No preview\\'">'
+      : 'No preview';
     const xtra = [p.mission ? 'Mission ' + p.mission : '', p.camera || '',
                   p.frame != null ? 'frame ' + p.frame : ''].filter(Boolean).join(' · ');
     const cart = scanned
       ? '<button class="sb-cart ' + (cartHas(p.entityId) ? 'in' : '') + '" data-eid="' + p.entityId +
         '" title="Add to download queue">' + (cartHas(p.entityId) ? '✓' : '＋') + '</button>' : '';
-    return `<div class="sb-item" data-i="${{i}}">
+    return `<div class="sb-item${{scanned ? '' : ' unsc'}}" data-i="${{i}}">
       <div class="hit-thumb">${{thumb}}</div>
       <div class="sb-meta">
         <div class="sb-id">${{p.entityId}}</div>
@@ -2554,16 +2576,19 @@ function renderHitList() {{
   sbDetailBody().innerHTML =
     `<div id="sb-hits-head">${{puFeats.length}} scenes at this point <span id="hits-count"></span></div>
      <div id="hits-ctl">
-       <input type="text" id="hits-q" placeholder="Filter by ID…" value="${{hitView.q.replace(/"/g, '&quot;')}}" autocomplete="off" spellcheck="false">
        <div class="hc-row">
+         <input type="text" id="hits-q" placeholder="Filter by ID…" value="${{hitView.q.replace(/"/g, '&quot;')}}" autocomplete="off" spellcheck="false">
          <select id="hits-sort">
            <option value="area">Smallest first</option>
            <option value="old">Oldest first</option>
            <option value="new">Newest first</option>
            <option value="sat">Satellite</option>
          </select>
-         ${{sats.length > 1 ? '<select id="hits-sat"><option value="">All satellites</option>' +
-           sats.map(s => '<option value="' + s + '">' + s + '</option>').join('') + '</select>' : ''}}
+       </div>
+       ${{sats.length > 1 ? '<div class="hc-row"><select id="hits-sat"><option value="">All satellites</option>' +
+         sats.map(s => '<option value="' + s + '">' + s + '</option>').join('') + '</select></div>' : ''}}
+       <div class="hc-view" id="hits-size">
+         <button data-size="sm">List</button><button data-size="lg">Large</button><button data-size="grid">Gallery</button>
        </div>
        <label><input type="checkbox" id="hits-dl"> Downloadable only</label>
        <button id="hits-queue">＋ Queue all</button>
@@ -2573,6 +2598,7 @@ function renderHitList() {{
   const satSel = document.getElementById('hits-sat');
   if (satSel) satSel.value = hitView.sat;
   document.getElementById('hits-dl').checked = hitView.dl;
+  document.querySelectorAll('#hits-size button').forEach(b => b.classList.toggle('on', b.dataset.size === hitView.size));
   renderHitRows();
 }}
 // Pointing at a result outlines its footprint on the map, which is how to tell
@@ -2592,6 +2618,14 @@ document.getElementById('sb-list').addEventListener('mouseleave', () => {{
   if (!document.getElementById('sidebar').classList.contains('detail')) highlightFootprint(null);
 }});
 sbDetailBody().addEventListener('click', e => {{
+  const sz = e.target.closest('#hits-size button');
+  if (sz) {{
+    hitView.size = sz.dataset.size;
+    try {{ localStorage.setItem('declass_hit_size', hitView.size); }} catch (err) {{}}
+    document.querySelectorAll('#hits-size button').forEach(b => b.classList.toggle('on', b === sz));
+    renderHitRows();
+    return;
+  }}
   const cb = e.target.closest('#sb-hits .sb-cart');
   if (cb) {{   // queue toggle on a row; don't open the scene
     e.stopPropagation();
