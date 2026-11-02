@@ -582,6 +582,24 @@ body{
 #sb-detail .pu-img{max-height:280px}
 #sb-hits-head{padding:12px 14px 4px;font-size:13px;color:#fff;font-weight:500}
 #sb-hits{padding:6px 8px}
+#hits-ctl{padding:4px 12px 10px;display:flex;flex-direction:column;gap:7px;border-bottom:1px solid #2c2c2c}
+#hits-ctl .hc-row{display:flex;gap:6px}
+#hits-ctl input[type=text],#hits-ctl select{flex:1;min-width:0;background:#2a2a2a;border:1px solid #3a3a3a;color:#ddd;
+  padding:7px 9px;border-radius:8px;font-size:12px;outline:none;color-scheme:dark;font-family:inherit}
+#hits-ctl input[type=text]:focus,#hits-ctl select:focus{border-color:#90caf9}
+#hits-ctl label{display:flex;align-items:center;gap:7px;font-size:11.5px;color:#999;cursor:pointer;user-select:none}
+#hits-ctl label input{accent-color:#42a5f5}
+#hits-queue{background:#2e2418;border:1px solid #e0913f55;color:#ffb74d;padding:7px 10px;border-radius:8px;
+  font-size:12px;cursor:pointer;font-weight:500;font-family:inherit}
+#hits-queue:hover{background:#3a2c1c;border-color:#e0913faa}
+#hits-queue:disabled{opacity:.4;cursor:default}
+#sb-hits-head{display:flex;align-items:baseline;justify-content:space-between}
+#hits-count{font-size:11px;color:#777;font-weight:400}
+.hit-thumb{width:104px;height:46px;flex-shrink:0;border-radius:6px;overflow:hidden;background:#121212;
+  border:1px solid #2c2c2c;display:flex;align-items:center;justify-content:center;color:#4a4a4a;font-size:10px;text-align:center;line-height:1.2}
+.hit-thumb img{width:100%;height:100%;object-fit:cover;object-position:center;display:block}
+.sb-xtra{font-size:10.5px;color:#777;margin-top:2px}
+.hit-empty{padding:22px 10px;text-align:center;color:#555;font-size:12px}
 .pu-img{width:100%;max-height:200px;object-fit:contain;object-position:center;
   border-radius:8px;margin-bottom:12px;display:block;cursor:pointer;background:#121212;
   border:1px solid #2c2c2c}
@@ -1555,6 +1573,7 @@ function renderPopup() {
 function openDetail(feats, idx, fromMap) {
   puFeats = feats; puIdx = idx;
   detailBackToHits = !!fromMap && feats.length > 1;
+  if (fromMap) hitView = {sort: 'area', dl: false, sat: '', q: ''};
   document.getElementById('sidebar').classList.add('detail');
   if (detailBackToHits) renderHitList(); else renderPopup();
 }
@@ -1562,22 +1581,100 @@ function closeDetail() {
   document.getElementById('sidebar').classList.remove('detail');
   if (highlightLayer) { map.removeLayer(highlightLayer); highlightLayer = null; }
 }
+// View settings for the list of scenes under a click: filter and sort live here
+// so they survive opening a scene and coming back.
+let hitView = {sort: 'area', dl: false, sat: '', q: ''};
+let hitObserver = null;
+const HIT_SORTS = {
+  area: null,   // as clicked: smallest footprint first
+  old:  (a, b) => (a.f.properties.acquisitionDate || '').localeCompare(b.f.properties.acquisitionDate || ''),
+  new:  (a, b) => (b.f.properties.acquisitionDate || '').localeCompare(a.f.properties.acquisitionDate || ''),
+  sat:  (a, b) => (a.f.properties.satellite || '').localeCompare(b.f.properties.satellite || '')
+                  || (a.f.properties.acquisitionDate || '').localeCompare(b.f.properties.acquisitionDate || ''),
+};
+function hitRows() {
+  const q = hitView.q.trim().toLowerCase();
+  const rows = puFeats.map((f, i) => ({f, i})).filter(({f}) => {
+    const p = f.properties;
+    if (hitView.dl && p.scanned === false) return false;
+    if (hitView.sat && p.satellite !== hitView.sat) return false;
+    if (q && !(p.entityId || '').toLowerCase().includes(q)) return false;
+    return true;
+  });
+  if (HIT_SORTS[hitView.sort]) rows.sort(HIT_SORTS[hitView.sort]);
+  return rows;
+}
+// Previews load only as their row scrolls into view; some browse images are
+// several MB, so fetching a long list at once would be wasteful.
+function observeHitThumbs() {
+  if (hitObserver) hitObserver.disconnect();
+  hitObserver = new IntersectionObserver(entries => entries.forEach(en => {
+    if (!en.isIntersecting) return;
+    const img = en.target;
+    hitObserver.unobserve(img);
+    img.src = img.dataset.src;
+  }), {root: sbDetailBody(), rootMargin: '150px'});
+  sbDetailBody().querySelectorAll('#sb-hits img[data-src]').forEach(i => hitObserver.observe(i));
+}
+function renderHitRows() {
+  const rows = hitRows();
+  document.getElementById('hits-count').textContent =
+    rows.length === puFeats.length ? '' : rows.length + ' of ' + puFeats.length + ' shown';
+  const dl = rows.filter(r => r.f.properties.scanned !== false).length;
+  const qb = document.getElementById('hits-queue');
+  qb.textContent = '＋ Queue ' + dl.toLocaleString() + ' downloadable';
+  qb.disabled = !dl;
+  document.getElementById('sb-hits').innerHTML = rows.length ? rows.map(({f, i}) => {
+    const p = f.properties;
+    const d = (p.acquisitionDate || '').slice(0, 10) || '—';
+    const scanned = p.scanned !== false;
+    const thumb = (scanned && p.browse)
+      ? '<img alt="" data-src="/img/' + p.browse.replace(/^https?:\/\/[^/]+\//, '') +
+        '" onerror="this.parentNode.textContent=\'No preview\'">'
+      : (scanned ? 'No preview' : 'Not scanned');
+    const xtra = [p.mission ? 'Mission ' + p.mission : '', p.camera || '',
+                  p.frame != null ? 'frame ' + p.frame : ''].filter(Boolean).join(' · ');
+    const cart = scanned
+      ? '<button class="sb-cart ' + (cartHas(p.entityId) ? 'in' : '') + '" data-eid="' + p.entityId +
+        '" title="Add to download queue">' + (cartHas(p.entityId) ? '✓' : '＋') + '</button>' : '';
+    return `<div class="sb-item" data-i="${i}">
+      <div class="hit-thumb">${thumb}</div>
+      <div class="sb-meta">
+        <div class="sb-id">${p.entityId}</div>
+        <div class="sb-sub">${d} · ${p.satellite || '—'}</div>
+        ${xtra ? '<div class="sb-xtra">' + xtra + '</div>' : ''}
+        <div class="sb-tags">${scanned
+          ? '<span class="sb-tag">Downloadable</span>' : '<span class="sb-tag un">Unscanned</span>'}</div>
+      </div>${cart}</div>`;
+  }).join('') : '<div class="hit-empty">No scenes match these filters.</div>';
+  observeHitThumbs();
+}
 function renderHitList() {
   highlightFootprint(null);
+  const sats = [...new Set(puFeats.map(f => f.properties.satellite).filter(Boolean))].sort();
   sbDetailBody().innerHTML =
-    `<div id="sb-hits-head">${puFeats.length} scenes at this point</div><div id="sb-hits">` +
-    puFeats.map((f, i) => {
-      const p = f.properties;
-      const d = (p.acquisitionDate || '').slice(0,10) || '—';
-      return `<div class="sb-item" data-i="${i}">
-        <div class="sb-thumb-ph">▦</div>
-        <div class="sb-meta">
-          <div class="sb-id">${p.entityId}</div>
-          <div class="sb-sub">${d} · ${p.satellite || '—'}</div>
-          <div class="sb-tags">${p.scanned === false
-            ? '<span class="sb-tag un">Unscanned</span>' : '<span class="sb-tag">Downloadable</span>'}</div>
-        </div></div>`;
-    }).join('') + '</div>';
+    `<div id="sb-hits-head">${puFeats.length} scenes at this point <span id="hits-count"></span></div>
+     <div id="hits-ctl">
+       <input type="text" id="hits-q" placeholder="Filter by ID…" value="${hitView.q.replace(/"/g, '&quot;')}" autocomplete="off" spellcheck="false">
+       <div class="hc-row">
+         <select id="hits-sort">
+           <option value="area">Smallest first</option>
+           <option value="old">Oldest first</option>
+           <option value="new">Newest first</option>
+           <option value="sat">Satellite</option>
+         </select>
+         ${sats.length > 1 ? '<select id="hits-sat"><option value="">All satellites</option>' +
+           sats.map(s => '<option value="' + s + '">' + s + '</option>').join('') + '</select>' : ''}
+       </div>
+       <label><input type="checkbox" id="hits-dl"> Downloadable only</label>
+       <button id="hits-queue">＋ Queue all</button>
+     </div>
+     <div id="sb-hits"></div>`;
+  document.getElementById('hits-sort').value = hitView.sort;
+  const satSel = document.getElementById('hits-sat');
+  if (satSel) satSel.value = hitView.sat;
+  document.getElementById('hits-dl').checked = hitView.dl;
+  renderHitRows();
 }
 // Pointing at a result outlines its footprint on the map, which is how to tell
 // overlapping scenes apart before opening one.
@@ -1596,10 +1693,34 @@ document.getElementById('sb-list').addEventListener('mouseleave', () => {
   if (!document.getElementById('sidebar').classList.contains('detail')) highlightFootprint(null);
 });
 sbDetailBody().addEventListener('click', e => {
+  const cb = e.target.closest('#sb-hits .sb-cart');
+  if (cb) {   // queue toggle on a row; don't open the scene
+    e.stopPropagation();
+    cartToggle(puFeats[parseInt(cb.closest('.sb-item').dataset.i)].properties);
+    return;
+  }
+  if (e.target.closest('#hits-queue')) {
+    const r = cartAddMany(hitRows().map(x => x.f.properties));
+    const qb = document.getElementById('hits-queue');
+    qb.textContent = '✓ Queued ' + r.added.toLocaleString() + (r.already ? ' (+' + r.already + ' already)' : '');
+    setTimeout(renderHitRows, 1800);
+    return;
+  }
   const row = e.target.closest('#sb-hits .sb-item');
   if (!row) return;
   puIdx = parseInt(row.dataset.i);
   renderPopup();
+});
+sbDetailBody().addEventListener('input', e => {
+  if (e.target.id === 'hits-q') { hitView.q = e.target.value; renderHitRows(); }
+});
+sbDetailBody().addEventListener('change', e => {
+  const id = e.target.id;
+  if (id === 'hits-sort') hitView.sort = e.target.value;
+  else if (id === 'hits-sat') hitView.sat = e.target.value;
+  else if (id === 'hits-dl') hitView.dl = e.target.checked;
+  else return;
+  renderHitRows();
 });
 document.getElementById('sb-back').addEventListener('click', () => {
   if (detailBackToHits && document.querySelector('#sb-hits') === null) renderHitList();
