@@ -1277,6 +1277,9 @@ body{{
 .ov-icon{{font-size:15px;flex-shrink:0}}
 .ov-badge{{margin-left:auto;font-size:11px;color:#666;background:#1e1e1e;padding:2px 7px;border-radius:10px;}}
 .ov-btn.on .ov-badge{{color:#9575cd}}
+#ov-cover{{margin-top:4px;border-style:dashed}}
+#ov-cover.on{{border-color:#42a5f566;color:#90caf9;background:#42a5f510;border-style:solid}}
+#ov-cover.on .ov-badge{{color:#90caf9}}
 
 /* Published toggle — toolbar variant */
 #published-toggle{{
@@ -1844,6 +1847,7 @@ body{{
     <button class="ov-btn" data-ov="naval"><span class="ov-icon">⚓</span>Naval Bases<span class="ov-badge" id="badge-naval"></span></button>
     <button class="ov-btn" data-ov="spaceport"><span class="ov-icon">🛰️</span>Spaceports / Launch<span class="ov-badge" id="badge-spaceport"></span></button>
     <button class="ov-btn" data-ov="testsite"><span class="ov-icon">💥</span>Nuclear Test Sites<span class="ov-badge" id="badge-testsite"></span></button>
+    <button class="ov-btn" id="ov-cover" style="display:none" title="Hide every image footprint that doesn't cover at least one of the selected points"><span class="ov-icon">◎</span>Only images covering these points<span class="ov-badge" id="ov-cover-n"></span></button>
   </div>
 
   <!-- USGS status -->
@@ -2078,6 +2082,12 @@ document.querySelectorAll('.cam-btn').forEach(b => {{
 }});
 
 let showUnscanned = true;   // unscanned film is shown by default; the toggle hides it
+// "Only footprints covering the selected overlay points". Declared up here with the
+// other filter state because buildLayers() reads them.
+const ovPoints = {{}};             // overlay category -> [{{lat, lon, n}}] while that overlay is on
+let ovCoverOnly = false;
+let ovGrid = new Map();          // 1-degree cell -> points, so a footprint only checks nearby points
+let ovCoverMemo = new Map();     // entityId -> covers any point; cleared when the point set changes
 let hidePublished = false;
 let recentDays = 0;   // 0 = off; else filter to scenes that became downloadable within N days
 // Frame-order window, as a percentage of each mission's flight sequence
@@ -2112,6 +2122,8 @@ function buildLayers() {{
 
   let feats = GEOJSON.features.filter(f => {{
     const p = f.properties;
+    if (ovCoverOnly && ovCoverActive() && !coversOverlay(f)) return false;
+
     // Unscanned frames follow the same filters as everything else (satellite,
     // dates, mission, camera, search). Only two filters can't apply to them:
     // film that isn't scanned is never "recently available" or "published".
@@ -4211,6 +4223,79 @@ function mergeSites(curated, fetched) {{
   return merged;
 }}
 
+// ── Only footprints covering the selected overlay points ─────────────────────
+function ovCoverActive() {{ return Object.keys(ovPoints).length > 0; }}
+function rebuildOvGrid() {{
+  ovCoverMemo = new Map();
+  ovGrid = new Map();
+  for (const pts of Object.values(ovPoints)) {{
+    for (const p of pts) {{
+      const k = Math.floor(p.lon) + ',' + Math.floor(p.lat);
+      let cell = ovGrid.get(k);
+      if (!cell) {{ cell = []; ovGrid.set(k, cell); }}
+      cell.push(p);
+    }}
+  }}
+}}
+function ringHas(ring, x, y) {{
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {{
+    const xi = ring[i][0], yi = ring[i][1], xj = ring[j][0], yj = ring[j][1];
+    if (((yi > y) !== (yj > y)) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside;
+  }}
+  return inside;
+}}
+function polyHas(rings, x, y) {{
+  if (!ringHas(rings[0], x, y)) return false;
+  for (let i = 1; i < rings.length; i++) if (ringHas(rings[i], x, y)) return false;
+  return true;
+}}
+function geomHas(g, x, y) {{
+  if (g.type === 'Polygon') return polyHas(g.coordinates, x, y);
+  if (g.type === 'MultiPolygon') return g.coordinates.some(r => polyHas(r, x, y));
+  return false;
+}}
+function coversOverlay(f) {{
+  const id = f.properties.entityId;
+  let v = ovCoverMemo.get(id);
+  if (v !== undefined) return v;
+  v = false;
+  const bb = featBBox(f), g = f.geometry;
+  // Footprints without an area (point-only records) can't be said to cover anything;
+  // ones spanning the antimeridian have a bounding box too wide to scan cell by cell.
+  if (bb && g && g.type !== 'Point' && bb[2] - bb[0] < 180) {{
+    scan:
+    for (let x = Math.floor(bb[0]); x <= Math.floor(bb[2]); x++) {{
+      for (let y = Math.floor(bb[1]); y <= Math.floor(bb[3]); y++) {{
+        const pts = ovGrid.get(x + ',' + y);
+        if (!pts) continue;
+        for (const p of pts) {{
+          if (p.lon >= bb[0] && p.lon <= bb[2] && p.lat >= bb[1] && p.lat <= bb[3] &&
+              geomHas(g, p.lon, p.lat)) {{ v = true; break scan; }}
+        }}
+      }}
+    }}
+  }}
+  ovCoverMemo.set(id, v);
+  return v;
+}}
+function updateOvCover() {{
+  rebuildOvGrid();
+  const btn = document.getElementById('ov-cover');
+  if (btn) btn.style.display = ovCoverActive() ? '' : 'none';
+  if (ovCoverOnly) {{ buildLayers(); showOvCoverCount(); }}
+}}
+function showOvCoverCount() {{
+  const n = document.getElementById('ov-cover-n');
+  if (n) n.textContent = ovCoverOnly ? visibleFeats.length.toLocaleString() : '';
+}}
+document.getElementById('ov-cover').addEventListener('click', () => {{
+  ovCoverOnly = !ovCoverOnly;
+  document.getElementById('ov-cover').classList.toggle('on', ovCoverOnly);
+  buildLayers();
+  showOvCoverCount();
+}});
+
 async function toggleOverlay(key) {{
   const btn = document.querySelector(`.ov-btn[data-ov="${{key}}"]`);
 
@@ -4218,8 +4303,10 @@ async function toggleOverlay(key) {{
   if (ovLayers[key]) {{
     map.removeLayer(ovLayers[key]);
     delete ovLayers[key];
+    delete ovPoints[key];
     btn?.classList.remove('on');
     updateOvToggle();
+    updateOvCover();
     return;
   }}
 
@@ -4232,8 +4319,10 @@ async function toggleOverlay(key) {{
     const layer = L.layerGroup(points.map(p => ovMarker(p.lat, p.lon, p.n, key)));
     layer.addTo(map);
     ovLayers[key] = layer;
+    ovPoints[key] = points;
     btn?.classList.add('on');
     updateOvToggle();
+    updateOvCover();
 
   }} catch(e) {{
     console.error('Overlay error:', e);
@@ -4298,7 +4387,7 @@ document.getElementById('ov-toggle').addEventListener('click', () => {{
     loadOverlayData().then(refreshOvBadges);
   }}
 }});
-document.querySelectorAll('.ov-btn').forEach(btn =>
+document.querySelectorAll('.ov-btn[data-ov]').forEach(btn =>
   btn.addEventListener('click', () => toggleOverlay(btn.dataset.ov))
 );
 
