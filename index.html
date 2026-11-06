@@ -155,6 +155,14 @@ body{
 }
 .bm-btn:hover{background:#333;border-color:#555;color:#fff}
 .bm-btn.on{background:#1a2a3a;border-color:#1976d2;color:#90caf9}
+/* Basemap picker: one dropdown instead of four buttons */
+.bm-select{
+  background:#2a2a2a;border:1px solid #3a3a3a;color:#aaa;padding:6px 8px;border-radius:8px;
+  cursor:pointer;font-size:12px;font-weight:500;font-family:inherit;outline:none;color-scheme:dark;
+  transition:all .15s;
+}
+.bm-select:hover{background:#333;border-color:#555;color:#fff}
+.bm-select:focus{border-color:#1976d2}
 
 /* Frame-order slider */
 .fr-slider{position:relative;height:30px;width:100%;cursor:pointer;user-select:none;touch-action:none}
@@ -901,10 +909,12 @@ body{
     <button id="sb-toggle" class="bm-btn" title="List the scenes drawn on the map">☰ List</button>
     <button id="globe-btn" class="bm-btn" title="Switch to globe view">🌐 Globe</button>
     <span style="width:1px;height:16px;background:#3a3a3a;margin:0 2px;display:inline-block"></span>
-    <button class="bm-btn on" data-bm="dark">Dark</button>
-    <button class="bm-btn" data-bm="satellite">Satellite</button>
-    <button class="bm-btn" data-bm="hybrid">Hybrid</button>
-    <button class="bm-btn" data-bm="osm">OSM</button>
+    <select id="bm-select" class="bm-select" title="Basemap" aria-label="Basemap">
+      <option value="dark">Dark</option>
+      <option value="satellite">Satellite</option>
+      <option value="hybrid">Hybrid</option>
+      <option value="osm">OSM</option>
+    </select>
   </div>
 </div>
 
@@ -1144,6 +1154,8 @@ function setBasemap(key) {
   // #sb-toggle share the .bm-btn look but manage their own toggle state.
   document.querySelectorAll('.bm-btn[data-bm]').forEach(b => b.classList.toggle('on', b.dataset.bm===key));
   currentBm = key;
+  const bmSel = document.getElementById('bm-select');
+  if (bmSel) bmSel.value = key;
   applyGlobeBasemap();   // keep the globe on the same basemap
 }
 setBasemap('dark');
@@ -3015,9 +3027,7 @@ document.querySelectorAll('.ms-all').forEach(btn => {
 });
 
 // ── Basemap ───────────────────────────────────────────────────────────────────
-// [data-bm] only — #globe-btn and #sb-toggle reuse the .bm-btn styling
-document.querySelectorAll('.bm-btn[data-bm]').forEach(btn =>
-  btn.addEventListener('click', () => setBasemap(btn.dataset.bm)));
+document.getElementById('bm-select').addEventListener('change', e => setBasemap(e.target.value));
 
 // ── Search with zoom ─────────────────────────────────────────────────────────
 let st;
