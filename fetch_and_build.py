@@ -3933,6 +3933,11 @@ let st;
 // ── Coordinate search ──────────────────────────────────────────────────────────
 // Matches "26.311583, 82.444639" (comma, whitespace, or both between the numbers)
 let coordMarker = null;
+// The search pin goes away as soon as its popup is closed (a click on the map
+// closes it), so a pin can't be left sitting on the map with nothing explaining it.
+function clearPin() {{
+  if (coordMarker) {{ map.removeLayer(coordMarker); coordMarker = null; }}
+}}
 function tryCoordSearch(str) {{
   const m = str.match(/^\\s*(-?\\d{{1,3}}(?:\\.\\d+)?)\\s*[,\\s]\\s*(-?\\d{{1,3}}(?:\\.\\d+)?)\\s*$/);
   if (!m) return false;
@@ -3942,6 +3947,7 @@ function tryCoordSearch(str) {{
   if (coordMarker) map.removeLayer(coordMarker);
   coordMarker = L.marker([lat, lon]).addTo(map)
     .bindPopup(lat.toFixed(6) + ', ' + lon.toFixed(6));
+  coordMarker.on('popupclose', clearPin);
   if (globeMode) {{ document.getElementById('globe-btn').click(); }}
   map.setView([lat, lon], 11);
   coordMarker.openPopup();
@@ -3973,6 +3979,7 @@ function gotoPlace(p) {{
   const label = document.createElement('div');
   label.textContent = (p.display_name || '').split(',').slice(0, 3).join(',');
   coordMarker = L.marker([lat, lon]).addTo(map).bindPopup(label);
+  coordMarker.on('popupclose', clearPin);
   const bb = p.boundingbox;
   if (bb && bb.length === 4) map.fitBounds([[+bb[0], +bb[2]], [+bb[1], +bb[3]]], {{padding: [40, 40], maxZoom: 12}});
   else map.setView([lat, lon], 10);
