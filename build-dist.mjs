@@ -17,6 +17,8 @@ const PUBLISH = [
   'vendor/maplibre-gl.js',
   'vendor/maplibre-gl.css',
   'vendor/pmtiles.js',
+  // Reads footprints out of the tile archive from the Leaflet page (area search).
+  'vendor/mvt.js',
   // Count labels on the zoomed-out cells. Noto Sans is OFL-licensed; only the
   // Latin range is needed, since the labels are digits.
   'vendor/fonts/NotoSans/0-255.pbf',

@@ -915,6 +915,8 @@ def build_html(geojson):
 <title>Declassified Satellite — Available Downloads</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="vendor/pmtiles.js"></script>
+<script src="vendor/mvt.js"></script>
 <style>
 *{{margin:0;padding:0;box-sizing:border-box}}
 html{{height:100%}}
@@ -1288,6 +1290,16 @@ body{{
 #ov-cover{{margin-top:4px;border-style:dashed}}
 #ov-cover.on{{border-color:#42a5f566;color:#90caf9;background:#42a5f510;border-style:solid}}
 #ov-cover.on .ov-badge{{color:#90caf9}}
+.area-sec{{margin-top:8px;padding-top:10px;border-top:1px solid #2c2c2c}}
+.area-row{{display:flex;gap:6px;margin-top:7px}}
+.area-btn{{flex:1;background:#2a2a2a;border:1px solid #3a3a3a;color:#bbb;padding:7px 4px;border-radius:8px;
+  font-size:11.5px;cursor:pointer;font-weight:500;font-family:inherit;transition:all .15s}}
+.area-btn:hover{{border-color:#555;color:#fff;background:#333}}
+.area-btn.on{{border-color:#ffa72688;color:#ffcc80;background:#ffa72614}}
+#area-status{{font-size:11px;color:#888;line-height:1.5;margin-top:8px}}
+#area-status.err{{color:#ef9a9a}}
+#area-status.ok{{color:#81c995}}
+#area-clear{{margin-top:8px;font-size:12px;padding:6px 10px}}
 
 /* Published toggle — toolbar variant */
 #published-toggle{{
@@ -1858,6 +1870,16 @@ body{{
     <button class="ov-btn" data-ov="spaceport"><span class="ov-icon">🛰️</span>Spaceports / Launch<span class="ov-badge" id="badge-spaceport"></span></button>
     <button class="ov-btn" data-ov="testsite"><span class="ov-icon">💥</span>Nuclear Test Sites<span class="ov-badge" id="badge-testsite"></span></button>
     <button class="ov-btn" id="ov-cover" style="display:none" title="Hide every image footprint that doesn't cover at least one of the selected points"><span class="ov-icon">◎</span>Only images covering these points<span class="ov-badge" id="ov-cover-n"></span></button>
+    <div class="area-sec">
+      <div class="ov-section">Unscanned scenes in an area</div>
+      <div id="area-status">There are about 700,000 unscanned frames, so they load one area at a time.</div>
+      <div class="area-row">
+        <button class="area-btn" id="area-view" title="Load the unscanned scenes under the current screen">This view</button>
+        <button class="area-btn" id="area-box" title="Drag a box on the map">Draw box</button>
+        <button class="area-btn" id="area-point" title="Click a spot: scenes covering that point">Drop point</button>
+      </div>
+      <button class="ov-btn" id="area-clear" style="display:none">✕ Clear loaded area scenes</button>
+    </div>
   </div>
 
   <!-- USGS status -->
@@ -2100,6 +2122,7 @@ const ovPoints = {{}};             // overlay category -> [{{lat, lon, n}}] whil
 let ovCoverOnly = false;
 let ovGrid = new Map();          // 1-degree cell -> points, so a footprint only checks nearby points
 let ovCoverMemo = new Map();     // entityId -> covers any point; cleared when the point set changes
+let areaMode = null;             // 'box' | 'point' while waiting for the user to pick an area
 let hidePublished = false;
 let recentDays = 0;   // 0 = off; else filter to scenes that became downloadable within N days
 // Frame-order window, as a percentage of each mission's flight sequence
@@ -2686,6 +2709,7 @@ document.getElementById('sb-back').addEventListener('click', () => {{
 document.getElementById('sb-close2').addEventListener('click', () => setSidebar(false));
 
 map.on('click', e => {{
+  if (areaMode) return;   // this click is choosing an area, not a footprint
   const hits = visibleFeats.filter(f => ptInPoly(e.latlng, f.geometry));
   if (!hits.length) return;
   hits.sort((a,b) => polyArea(a.geometry)-polyArea(b.geometry));
@@ -4239,6 +4263,194 @@ function mergeSites(curated, fetched) {{
   }}
   return merged;
 }}
+
+// ── Unscanned scenes by area ──────────────────────────────────────────────────
+// About 700,000 unscanned frames exist: far too many to hold in the page. But the
+// zoom-8 tiles of the tile archive contain every one of them, so the page fetches
+// only the tiles under an area the user chooses (this view, a drawn box, or a
+// point), decodes them, and adds the unscanned footprints found there to the map as
+// ordinary scenes: filters, the results list, hover and the preview all apply.
+const AREA_Z = 8, AREA_MAX_TILES = 48, AREA_DENSE_BYTES = 400000;
+let areaPM = null, areaLayer = null;
+// The Overlays button and panel sit inside the map element, so without this a click
+// on them also counts as a click on the map (picking an area, opening a footprint).
+for (const id of ['ov-panel', 'ov-toggle']) {{
+  const el = document.getElementById(id);
+  if (el) {{ L.DomEvent.disableClickPropagation(el); L.DomEvent.disableScrollPropagation(el); }}
+}}
+function areaStatus(msg, cls) {{
+  const el = document.getElementById('area-status');
+  el.textContent = msg; el.className = cls || '';
+}}
+function lonLatToTile(lon, lat, z) {{
+  const n = 2 ** z, r = Math.max(-85.05, Math.min(85.05, lat)) * Math.PI / 180;
+  const x = Math.floor((Math.max(-180, Math.min(179.999, lon)) + 180) / 360 * n);
+  const y = Math.floor((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * n);
+  return [Math.max(0, Math.min(n - 1, x)), Math.max(0, Math.min(n - 1, y))];
+}}
+function geomBBox(g) {{
+  let x0 = 180, y0 = 90, x1 = -180, y1 = -90;
+  const polys = g.type === 'Polygon' ? [g.coordinates] : g.coordinates;
+  for (const poly of polys) for (const ring of poly) for (const c of ring) {{
+    if (c[0] < x0) x0 = c[0]; if (c[0] > x1) x1 = c[0];
+    if (c[1] < y0) y0 = c[1]; if (c[1] > y1) y1 = c[1];
+  }}
+  return [x0, y0, x1, y1];
+}}
+async function areaLoad(w, s, e, n, pt) {{
+  if (!window.pmtiles || !window.MVT) {{ areaStatus('The tile reader did not load; reload the page.', 'err'); return; }}
+  const [x0, y0] = lonLatToTile(w, n, AREA_Z), [x1, y1] = lonLatToTile(e, s, AREA_Z);
+  const count = (x1 - x0 + 1) * (y1 - y0 + 1);
+  if (count > AREA_MAX_TILES) {{
+    areaStatus('That area covers ' + count + ' map tiles (the limit is ' + AREA_MAX_TILES +
+               '). Zoom in or draw a smaller box.', 'err');
+    return;
+  }}
+  areaStatus('Loading ' + count + ' tile' + (count === 1 ? '' : 's') + '…');
+  areaPM = areaPM || new pmtiles.PMTiles(location.origin + '/data/scenes.pmtiles');
+  const jobs = [];
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) jobs.push([x, y]);
+  const found = new Map();
+  let dense = 0, failed = 0;
+  const work = async () => {{
+    while (jobs.length) {{
+      const [x, y] = jobs.shift();
+      try {{
+        const t = await areaPM.getZxy(AREA_Z, x, y);
+        if (!t) continue;
+        if (t.data.byteLength > AREA_DENSE_BYTES) dense++;
+        const layer = new MVT.VectorTile(new MVT.PbfReader(new Uint8Array(t.data))).layers.scenes;
+        if (!layer) continue;
+        for (let i = 0; i < layer.length; i++) {{
+          const ft = layer.feature(i), p = ft.properties;
+          if (p.scanned !== false) continue;          // scanned scenes are already on the map
+          const g = ft.toGeoJSON(x, y, AREA_Z).geometry;
+          const rec = found.get(p.entityId);
+          if (rec) rec.parts.push(g); else found.set(p.entityId, {{props: Object.assign({{}}, p), parts: [g]}});
+        }}
+      }} catch (err) {{ failed++; }}
+    }}
+  }};
+  await Promise.all(Array.from({{length: 6}}, work));
+
+  // A footprint that crosses a tile edge comes back in pieces; join them again.
+  const have = entityIndex(), feats = [], bySat = {{}};
+  for (const [id, rec] of found) {{
+    if (have.has(id)) continue;
+    const polys = [];
+    for (const g of rec.parts) {{
+      if (g.type === 'Polygon') polys.push(g.coordinates);
+      else if (g.type === 'MultiPolygon') for (const c of g.coordinates) polys.push(c);
+    }}
+    if (!polys.length) continue;
+    const geom = polys.length === 1 ? {{type: 'Polygon', coordinates: polys[0]}}
+                                    : {{type: 'MultiPolygon', coordinates: polys}};
+    if (pt) {{ if (!geomHas(geom, pt[0], pt[1])) continue; }}
+    else {{ const bb = geomBBox(geom); if (bb[2] < w || bb[0] > e || bb[3] < s || bb[1] > n) continue; }}
+    rec.props._area = true;
+    feats.push({{type: 'Feature', geometry: geom, properties: rec.props}});
+    bySat[rec.props.satellite] = (bySat[rec.props.satellite] || 0) + 1;
+  }}
+  hydrate(feats);
+  for (const f of feats) GEOJSON.features.push(f);
+  buildLayers();
+  if (typeof updateSidebar === 'function') updateSidebar(true);
+  document.getElementById('area-clear').style.display = GEOJSON.features.some(f => f.properties._area) ? '' : 'none';
+
+  const parts = Object.entries(bySat).sort((a, b) => b[1] - a[1]).map(([k, v]) => v.toLocaleString() + ' ' + k);
+  let msg = feats.length
+    ? 'Added ' + feats.length.toLocaleString() + ' unscanned scene' + (feats.length === 1 ? '' : 's') + ': ' + parts.join(', ') + '.'
+    : 'No new unscanned scenes in that area.';
+  const off = Object.keys(bySat).filter(k => satActive[k] === false);
+  if (off.length) msg += ' ' + off.join(', ') + ' is switched off in the Satellite filter.';
+  if (dense) msg += ' Dense area: some footprints may be missing from the busiest tiles.';
+  if (failed) msg += ' ' + failed + ' tile(s) failed to load.';
+  areaStatus(msg, feats.length && !failed ? 'ok' : (failed ? 'err' : ''));
+}}
+function areaOutline(layer) {{
+  if (areaLayer) map.removeLayer(areaLayer);
+  areaLayer = layer.addTo(map);
+}}
+function setAreaMode(m) {{
+  areaMode = m;
+  document.getElementById('area-box').classList.toggle('on', m === 'box');
+  document.getElementById('area-point').classList.toggle('on', m === 'point');
+  map.getContainer().style.cursor = m ? 'crosshair' : '';
+}}
+let areaCancel = null;
+function areaStop() {{
+  if (areaCancel) {{ areaCancel(); areaCancel = null; }}
+  setAreaMode(null);
+}}
+document.getElementById('area-view').addEventListener('click', () => {{
+  areaStop();
+  const b = map.getBounds();
+  areaOutline(L.rectangle(b.pad(-0.02), {{color: '#42a5f5', weight: 1.5, fill: false, dashArray: '6 4', interactive: false}}));
+  areaLoad(b.getWest(), b.getSouth(), b.getEast(), b.getNorth(), null);
+}});
+document.getElementById('area-point').addEventListener('click', () => {{
+  const was = areaMode === 'point';
+  areaStop();
+  if (was) {{ areaStatus(''); return; }}
+  setAreaMode('point');
+  areaStatus('Click the map: scenes covering that spot are loaded.');
+  const onClick = e => {{
+    const {{lat, lng}} = e.latlng;
+    areaCancel = null; setAreaMode(null);
+    areaOutline(L.circleMarker(e.latlng, {{radius: 7, color: '#42a5f5', weight: 2, fillOpacity: .25, interactive: false}}));
+    areaLoad(lng - 0.02, lat - 0.02, lng + 0.02, lat + 0.02, [lng, lat]);
+  }};
+  map.once('click', onClick);
+  areaCancel = () => map.off('click', onClick);
+}});
+document.getElementById('area-box').addEventListener('click', () => {{
+  const was = areaMode === 'box';
+  areaStop();
+  if (was) {{ areaStatus(''); return; }}
+  setAreaMode('box');
+  areaStatus('Drag on the map to draw a box.');
+  const c = map.getContainer();
+  let start = null, rect = null;
+  map.dragging.disable();
+  c.style.touchAction = 'none';
+  const finish = () => {{
+    c.removeEventListener('pointerdown', down);
+    document.removeEventListener('pointermove', move);
+    document.removeEventListener('pointerup', up);
+    map.dragging.enable();
+    c.style.touchAction = '';
+    areaCancel = null;
+  }};
+  const down = ev => {{
+    if (ev.target.closest('.leaflet-control, .leaflet-popup, #ov-panel')) return;
+    start = map.mouseEventToLatLng(ev);
+    rect = L.rectangle([start, start], {{color: '#42a5f5', weight: 1.5, fill: false, dashArray: '6 4', interactive: false}}).addTo(map);
+    document.addEventListener('pointermove', move);
+    document.addEventListener('pointerup', up);
+    ev.preventDefault();
+  }};
+  const move = ev => rect.setBounds(L.latLngBounds(start, map.mouseEventToLatLng(ev)));
+  const up = ev => {{
+    const b = L.latLngBounds(start, map.mouseEventToLatLng(ev));
+    const tiny = map.latLngToContainerPoint(b.getNorthWest()).distanceTo(map.latLngToContainerPoint(b.getSouthEast())) < 12;
+    finish(); setAreaMode(null);
+    if (tiny) {{ map.removeLayer(rect); areaStatus('Box too small; try again.', 'err'); return; }}
+    areaOutline(rect);
+    areaLoad(b.getWest(), b.getSouth(), b.getEast(), b.getNorth(), null);
+  }};
+  c.addEventListener('pointerdown', down);
+  areaCancel = () => {{ finish(); if (rect) map.removeLayer(rect); }};
+}});
+document.addEventListener('keydown', e => {{ if (e.key === 'Escape' && areaMode) {{ areaStop(); areaStatus(''); }} }});
+document.getElementById('area-clear').addEventListener('click', () => {{
+  areaStop();
+  GEOJSON.features = GEOJSON.features.filter(f => !f.properties._area);
+  if (areaLayer) {{ map.removeLayer(areaLayer); areaLayer = null; }}
+  buildLayers();
+  if (typeof updateSidebar === 'function') updateSidebar(true);
+  document.getElementById('area-clear').style.display = 'none';
+  areaStatus('Cleared.');
+}});
 
 // ── Only footprints covering the selected overlay points ─────────────────────
 function ovCoverActive() {{ return Object.keys(ovPoints).length > 0; }}
