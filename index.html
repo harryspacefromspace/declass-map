@@ -391,6 +391,8 @@ body{
 #area-status.err{color:#ef9a9a}
 #area-status.ok{color:#81c995}
 #area-clear{margin-top:8px;font-size:12px;padding:6px 10px}
+.area-opt{display:flex;align-items:center;gap:7px;font-size:11.5px;color:#999;cursor:pointer;margin-top:9px}
+.area-opt input{accent-color:#42a5f5}
 
 /* Published toggle — toolbar variant */
 #published-toggle{
@@ -972,14 +974,15 @@ body{
     <button class="ov-btn" data-ov="testsite"><span class="ov-icon">💥</span>Nuclear Test Sites<span class="ov-badge" id="badge-testsite"></span></button>
     <button class="ov-btn" id="ov-cover" style="display:none" title="Hide every image footprint that doesn't cover at least one of the selected points"><span class="ov-icon">◎</span>Only images covering these points<span class="ov-badge" id="ov-cover-n"></span></button>
     <div class="area-sec">
-      <div class="ov-section">Unscanned scenes in an area</div>
-      <div id="area-status">There are about 700,000 unscanned frames, so they load one area at a time.</div>
+      <div class="ov-section">Search an area</div>
+      <div id="area-status">Shows only the scenes in the area you pick. About 700,000 unscanned frames exist, so those load on demand.</div>
       <div class="area-row">
         <button class="area-btn" id="area-view" title="Load the unscanned scenes under the current screen">This view</button>
         <button class="area-btn" id="area-box" title="Drag a box on the map">Draw box</button>
         <button class="area-btn" id="area-point" title="Click a spot: scenes covering that point">Drop point</button>
       </div>
-      <button class="ov-btn" id="area-clear" style="display:none">✕ Clear loaded area scenes</button>
+      <label class="area-opt"><input type="checkbox" id="area-scanned" checked> Include scanned scenes</label>
+      <button class="ov-btn" id="area-clear" style="display:none">✕ Clear area search</button>
     </div>
   </div>
 
@@ -1224,6 +1227,7 @@ let ovCoverOnly = false;
 let ovGrid = new Map();          // 1-degree cell -> points, so a footprint only checks nearby points
 let ovCoverMemo = new Map();     // entityId -> covers any point; cleared when the point set changes
 let areaMode = null;             // 'box' | 'point' while waiting for the user to pick an area
+let areaFilter = null;           // {w,s,e,n,pt,scanned} while an area search is limiting the map
 let hidePublished = false;
 let recentDays = 0;   // 0 = off; else filter to scenes that became downloadable within N days
 // Frame-order window, as a percentage of each mission's flight sequence
@@ -1258,6 +1262,7 @@ function buildLayers() {
 
   let feats = GEOJSON.features.filter(f => {
     const p = f.properties;
+    if (areaFilter && !inAreaFilter(f)) return false;
     if (ovCoverOnly && ovCoverActive() && !coversOverlay(f)) return false;
 
     // Unscanned frames follow the same filters as everything else (satellite,
@@ -3398,6 +3403,48 @@ function geomBBox(g) {
   }
   return [x0, y0, x1, y1];
 }
+// Does a footprint actually touch a lon/lat rectangle? (A slanted strip's bounding
+// box overlaps far more than the strip does.) True if any edge crosses the
+// rectangle, which includes a corner inside it, or if the rectangle sits inside.
+function segHitsRect(x1, y1, x2, y2, w, s, e, n) {
+  let t0 = 0, t1 = 1;
+  const dx = x2 - x1, dy = y2 - y1;
+  for (const [p, q] of [[-dx, x1 - w], [dx, e - x1], [-dy, y1 - s], [dy, n - y1]]) {
+    if (p === 0) { if (q < 0) return false; continue; }
+    const r = q / p;
+    if (p < 0) { if (r > t1) return false; if (r > t0) t0 = r; }
+    else { if (r < t0) return false; if (r < t1) t1 = r; }
+  }
+  return true;
+}
+function geomHitsRect(g, w, s, e, n) {
+  const polys = g.type === 'Polygon' ? [g.coordinates] : g.coordinates;
+  for (const poly of polys) {
+    for (const ring of poly) {
+      for (let i = 1; i < ring.length; i++) {
+        if (segHitsRect(ring[i - 1][0], ring[i - 1][1], ring[i][0], ring[i][1], w, s, e, n)) return true;
+      }
+    }
+  }
+  return geomHas(g, (w + e) / 2, (s + n) / 2);
+}
+// The map filter while an area search is active.
+function inAreaFilter(f) {
+  const a = areaFilter;
+  if (f.properties.scanned !== false && !a.scanned) return false;
+  const g = f.geometry;
+  if (!g || (g.type !== 'Polygon' && g.type !== 'MultiPolygon')) return false;
+  const bb = featBBox(f);
+  if (!bb || bb[2] < a.w || bb[0] > a.e || bb[3] < a.s || bb[1] > a.n) return false;
+  return a.pt ? geomHas(g, a.pt[0], a.pt[1]) : geomHitsRect(g, a.w, a.s, a.e, a.n);
+}
+function areaSummary() {
+  const shown = visibleFeats.length;
+  const un = visibleFeats.filter(f => f.properties.scanned === false).length;
+  return 'Showing ' + shown.toLocaleString() + ' scene' + (shown === 1 ? '' : 's') + ' in this area (' +
+         (shown - un).toLocaleString() + ' scanned, ' + un.toLocaleString() + ' unscanned).';
+}
+
 async function areaLoad(w, s, e, n, pt) {
   if (!window.pmtiles || !window.MVT) { areaStatus('The tile reader did not load; reload the page.', 'err'); return; }
   const [x0, y0] = lonLatToTile(w, n, AREA_Z), [x1, y1] = lonLatToTile(e, s, AREA_Z);
@@ -3447,21 +3494,22 @@ async function areaLoad(w, s, e, n, pt) {
     const geom = polys.length === 1 ? {type: 'Polygon', coordinates: polys[0]}
                                     : {type: 'MultiPolygon', coordinates: polys};
     if (pt) { if (!geomHas(geom, pt[0], pt[1])) continue; }
-    else { const bb = geomBBox(geom); if (bb[2] < w || bb[0] > e || bb[3] < s || bb[1] > n) continue; }
+    else if (!geomHitsRect(geom, w, s, e, n)) continue;
     rec.props._area = true;
     feats.push({type: 'Feature', geometry: geom, properties: rec.props});
     bySat[rec.props.satellite] = (bySat[rec.props.satellite] || 0) + 1;
   }
   hydrate(feats);
   for (const f of feats) GEOJSON.features.push(f);
+  // From here on the map shows only this area (scanned ones optional) until cleared.
+  areaFilter = {w, s, e, n, pt, scanned: document.getElementById('area-scanned').checked};
   buildLayers();
   if (typeof updateSidebar === 'function') updateSidebar(true);
-  document.getElementById('area-clear').style.display = GEOJSON.features.some(f => f.properties._area) ? '' : 'none';
+  document.getElementById('area-clear').style.display = '';
 
   const parts = Object.entries(bySat).sort((a, b) => b[1] - a[1]).map(([k, v]) => v.toLocaleString() + ' ' + k);
-  let msg = feats.length
-    ? 'Added ' + feats.length.toLocaleString() + ' unscanned scene' + (feats.length === 1 ? '' : 's') + ': ' + parts.join(', ') + '.'
-    : 'No new unscanned scenes in that area.';
+  let msg = areaSummary();
+  if (feats.length) msg += ' Loaded ' + feats.length.toLocaleString() + ' more unscanned: ' + parts.join(', ') + '.';
   const off = Object.keys(bySat).filter(k => satActive[k] === false);
   if (off.length) msg += ' ' + off.join(', ') + ' is switched off in the Satellite filter.';
   if (dense) msg += ' Dense area: some footprints may be missing from the busiest tiles.';
@@ -3545,12 +3593,20 @@ document.getElementById('area-box').addEventListener('click', () => {
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && areaMode) { areaStop(); areaStatus(''); } });
 document.getElementById('area-clear').addEventListener('click', () => {
   areaStop();
+  areaFilter = null;
   GEOJSON.features = GEOJSON.features.filter(f => !f.properties._area);
   if (areaLayer) { map.removeLayer(areaLayer); areaLayer = null; }
   buildLayers();
   if (typeof updateSidebar === 'function') updateSidebar(true);
   document.getElementById('area-clear').style.display = 'none';
-  areaStatus('Cleared.');
+  areaStatus('Area search cleared; showing everything again.');
+});
+document.getElementById('area-scanned').addEventListener('change', e => {
+  if (!areaFilter) return;
+  areaFilter.scanned = e.target.checked;
+  buildLayers();
+  if (typeof updateSidebar === 'function') updateSidebar(true);
+  areaStatus(areaSummary(), 'ok');
 });
 
 // ── Only footprints covering the selected overlay points ─────────────────────
