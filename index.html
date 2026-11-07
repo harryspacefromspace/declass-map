@@ -381,6 +381,17 @@ body{
 #ov-cover{margin-top:4px;border-style:dashed}
 #ov-cover.on{border-color:#42a5f566;color:#90caf9;background:#42a5f510;border-style:solid}
 #ov-cover.on .ov-badge{color:#90caf9}
+#area-open{white-space:nowrap}
+#area-open.on{background:#1a2a3a;border-color:#1976d2;color:#90caf9}
+#area-panel{
+  position:absolute;top:12px;left:60px;z-index:999;
+  background:rgba(18,18,18,.96);backdrop-filter:blur(12px);
+  border:1px solid #2c2c2c;border-radius:12px;padding:14px;
+  width:250px;max-width:calc(100vw - 80px);display:none;flex-direction:column;
+  box-shadow:0 8px 24px rgba(0,0,0,.6);
+}
+#area-panel.open{display:flex}
+#area-panel .area-sec{margin:0;padding:0;border:0}
 .area-sec{margin-top:8px;padding-top:10px;border-top:1px solid #2c2c2c}
 .area-row{display:flex;gap:6px;margin-top:7px}
 .area-btn{flex:1;background:#2a2a2a;border:1px solid #3a3a3a;color:#bbb;padding:7px 4px;border-radius:8px;
@@ -910,6 +921,9 @@ body{
     Hide unscanned
   </button>
 
+  <!-- Area search -->
+  <button id="area-open" class="tb-btn" title="Show only the scenes in an area you pick, including unscanned ones">⌖ Search area</button>
+
   <!-- Published toggle -->
   <button id="published-toggle">
     <span class="published-dot"></span>
@@ -973,6 +987,9 @@ body{
     <button class="ov-btn" data-ov="spaceport"><span class="ov-icon">🛰️</span>Spaceports / Launch<span class="ov-badge" id="badge-spaceport"></span></button>
     <button class="ov-btn" data-ov="testsite"><span class="ov-icon">💥</span>Nuclear Test Sites<span class="ov-badge" id="badge-testsite"></span></button>
     <button class="ov-btn" id="ov-cover" style="display:none" title="Hide every image footprint that doesn't cover at least one of the selected points"><span class="ov-icon">◎</span>Only images covering these points<span class="ov-badge" id="ov-cover-n"></span></button>
+  </div>
+
+  <div id="area-panel">
     <div class="area-sec">
       <div class="ov-section">Search an area</div>
       <div id="area-status">Shows only the scenes in the area you pick. About 700,000 unscanned frames exist, so those load on demand.</div>
@@ -3380,7 +3397,7 @@ const AREA_Z = 8, AREA_MAX_TILES = 48, AREA_DENSE_BYTES = 400000;
 let areaPM = null, areaLayer = null;
 // The Overlays button and panel sit inside the map element, so without this a click
 // on them also counts as a click on the map (picking an area, opening a footprint).
-for (const id of ['ov-panel', 'ov-toggle']) {
+for (const id of ['ov-panel', 'ov-toggle', 'area-panel', 'area-open']) {
   const el = document.getElementById(id);
   if (el) { L.DomEvent.disableClickPropagation(el); L.DomEvent.disableScrollPropagation(el); }
 }
@@ -3608,6 +3625,27 @@ document.getElementById('area-scanned').addEventListener('change', e => {
   if (typeof updateSidebar === 'function') updateSidebar(true);
   areaStatus(areaSummary(), 'ok');
 });
+
+// The search has its own toolbar button and panel, so it can be found without
+// knowing it lives under Overlays. The button lights up while an area search is limiting the map.
+function syncAreaBtn() {
+  const open = document.getElementById('area-panel').classList.contains('open');
+  document.getElementById('area-open').classList.toggle('on', open || !!areaFilter);
+}
+document.getElementById('area-open').addEventListener('click', () => {
+  const panel = document.getElementById('area-panel');
+  panel.classList.toggle('open');
+  if (panel.classList.contains('open')) {
+    document.getElementById('ov-panel').classList.remove('open');
+    document.getElementById('ov-toggle').classList.remove('open');
+    document.body.classList.remove('m-filters-open');   // on a phone the filter sheet would cover it
+  } else {
+    areaStop();
+  }
+  syncAreaBtn();
+});
+// Run after an area is loaded or cleared (their handlers are defined above).
+new MutationObserver(syncAreaBtn).observe(document.getElementById('area-clear'), {attributes: true, attributeFilter: ['style']});
 
 // ── Only footprints covering the selected overlay points ─────────────────────
 function ovCoverActive() { return Object.keys(ovPoints).length > 0; }
