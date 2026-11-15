@@ -1830,7 +1830,7 @@ body{{
   </button>
 
   <!-- Basemap dropdown -->
-  <button id="reset-btn">Reset</button>
+  <button id="reset-btn" title="Unselect all satellites and clear every filter">Unselect all</button>
   <div id="view-group">
     <button id="cart-btn" class="bm-btn" title="Download queue — build a batch download script">⬇ Queue</button>
     <button id="sb-toggle" class="bm-btn" title="List the scenes drawn on the map">☰ List</button>
@@ -3563,9 +3563,11 @@ updateSlider();
 
 // ── Reset ─────────────────────────────────────────────────────────────────────
 function resetAllFilters() {{
-  // Satellites — all on
-  Object.keys(satActive).forEach(k => satActive[k] = true);
-  document.querySelectorAll('.sat-btn').forEach(b => b.classList.add('on'));
+  // Satellites: none selected, the same blank slate the page opens with
+  Object.keys(satActive).forEach(k => satActive[k] = false);
+  document.querySelectorAll('.sat-btn').forEach(b => b.classList.remove('on'));
+  // An area search is a selection too
+  if (areaFilter) document.getElementById('area-clear').click();
   // Year slider
   yearLo=YEAR_MIN; yearHi=YEAR_MAX; yearFiltering=false;
   updateSlider();
