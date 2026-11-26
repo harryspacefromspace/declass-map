@@ -1478,6 +1478,9 @@ body{{
 #bd-status{{font-size:11.5px;color:#aaa;margin-top:8px;line-height:1.5;word-break:break-word;min-height:15px}}
 #bd-status.err{{color:#ef9a9a}}
 #bd-status.ok{{color:#81c995}}
+#cart-box{{overflow-y:auto}}
+#cart-box>*{{flex-shrink:0}}
+#cart-list{{max-height:24vh}}
 #bd-log{{font-size:10.5px;color:#777;font-family:monospace;max-height:80px;overflow-y:auto;margin-top:5px;line-height:1.5}}
 #cart-dl-script{{flex:none;background:transparent;border-color:#3a3a3a;color:#aaa}}
 #cart-dl-script:hover{{border-color:#888;color:#fff;background:#2a2a2a}}
@@ -2143,6 +2146,7 @@ let ovCoverOnly = false;
 let ovGrid = new Map();          // 1-degree cell -> points, so a footprint only checks nearby points
 let ovCoverMemo = new Map();     // entityId -> covers any point; cleared when the point set changes
 let areaMode = null;             // 'box' | 'point' while waiting for the user to pick an area
+const QUEUE_HASH = location.hash.startsWith('#queue=') ? location.hash.slice(7) : '';
 let areaFilter = null;           // {{w,s,e,n,pt,scanned}} while an area search is limiting the map
 let hidePublished = false;
 let recentDays = 0;   // 0 = off; else filter to scenes that became downloadable within N days
@@ -2383,7 +2387,7 @@ function hydrate(feats) {{
   counter.textContent = 'Loading scenes…';
   fetch(DATA_URL)
     .then(r => {{ if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }})
-    .then(data => {{ GEOJSON = data; hydrate(GEOJSON.features); buildLayers(); }})
+    .then(data => {{ GEOJSON = data; hydrate(GEOJSON.features); buildLayers(); importQueueFromHash(); }})
     .catch(err => {{
       console.error('Scene data load failed:', err);
       counter.textContent = 'Failed to load scenes — retrying…';
@@ -2963,6 +2967,7 @@ function renderCart() {{
   if (bs) {{
     bs.disabled = !items.length || bd.running;
     bs.textContent = bd.running ? 'Downloading…' : '⬇ Download all ' + items.length.toLocaleString();
+    if (!items.length && !bd.running) bdStatus('Your queue is empty - add scenes with ＋ before downloading.');
   }}
   const byDs = {{}};
   items.forEach(s => {{ byDs[s.dataset] = (byDs[s.dataset] || 0) + 1; }});
@@ -3054,7 +3059,9 @@ async function bdPick() {{
     bdSaveHandle(bd.root);
     bdShowFolder();
     bdStatus('');
-  }} catch (e) {{ /* cancelled */ }}
+  }} catch (e) {{
+    if (e.name !== 'AbortError') bdStatus('Could not open the folder picker: ' + e.message, 'err');
+  }}
 }}
 async function bdEnsurePermission() {{
   if (!bd.root) return false;
@@ -3063,7 +3070,11 @@ async function bdEnsurePermission() {{
   return (await bd.root.requestPermission(opts)) === 'granted';
 }}
 
-function bdStatus(msg, cls) {{ const e = $bd('bd-status'); e.textContent = msg; e.className = cls || ''; }}
+function bdStatus(msg, cls) {{
+  const e = $bd('bd-status');
+  e.textContent = msg; e.className = cls || '';
+  if (msg) e.scrollIntoView({{block: 'nearest'}});
+}}
 function bdLog(msg) {{
   const l = $bd('bd-log'), d = document.createElement('div');
   d.textContent = msg; l.appendChild(d);
@@ -3309,11 +3320,35 @@ async function bdStart() {{
   finally {{ bd.running = false; $bd('bd-stop').disabled = true; renderCart(); }}
 }}
 
-$bd('bd-pick').addEventListener('click', bdPick);
-$bd('bd-start').addEventListener('click', bdStart);
+// Inside a frame (the map embedded in another page) browsers refuse the folder
+// picker, so both buttons open the map in its own tab and carry the queue over in
+// the address - the embedded copy's saved queue isn't shared with the real tab.
+const BD_EMBEDDED = window.top !== window.self;
+function bdOpenOwnTab() {{
+  const ids = [...cart.keys()];
+  const url = location.origin + '/' + (ids.length ? '#queue=' + ids.join(',') : '');
+  const w = window.open(url, '_blank');
+  if (!w) bdStatus('Your browser blocked the new tab. Open ' + location.origin + ' directly to download.', 'err');
+}}
+function importQueueFromHash() {{
+  if (!QUEUE_HASH) return;
+  const idx = entityIndex();
+  const r = cartAddMany(QUEUE_HASH.split(',').map(id => idx.get(decodeURIComponent(id))));
+  history.replaceState(null, '', location.pathname + location.search);
+  document.getElementById('cart-btn').click();
+  bdStatus('Brought over ' + (r.added + r.already).toLocaleString() + ' queued scene(s). Choose a folder to download.', 'ok');
+}}
+$bd('bd-pick').addEventListener('click', () => BD_EMBEDDED ? bdOpenOwnTab() : bdPick());
+$bd('bd-start').addEventListener('click', () => BD_EMBEDDED ? bdOpenOwnTab() : bdStart());
 $bd('bd-stop').addEventListener('click', () => {{ bd.stop = true; if (bd.abort) bd.abort.abort(); }});
 $bd('bd-pick').style.display = BD_OK ? '' : 'none';
 $bd('bd-folder').style.display = BD_OK ? '' : 'none';
+if (BD_EMBEDDED) {{
+  $bd('bd-pick').style.display = '';
+  $bd('bd-pick').textContent = 'Open in its own tab ↗';
+  $bd('bd-folder').style.display = 'none';
+  bdStatus('Folder downloads do not work while the map is embedded in another page. Open it in its own tab.', 'err');
+}}
 $bd('bd-nofolder').style.display = BD_OK ? 'none' : 'block';
 document.getElementById('cart-btn').addEventListener('click', () => {{
   try {{
